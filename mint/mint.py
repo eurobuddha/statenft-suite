@@ -55,12 +55,28 @@ def token_script(creator_pubkey):
             f"VERIFYOUT(@INPUT GETOUTADDR(@INPUT) @AMOUNT @TOKENID TRUE)")
 
 
-def find_token(name):
+def find_token(name, script=None, size=None):
+    """Find OUR minted token. Names are not unique (two DLNW tokens have
+    existed) and anyone can mint a same-named token and send it to us, so a
+    candidate must also carry our exact enforcement script. Ambiguity is an
+    error, never a guess."""
+    matches = []
     for b in rpc_ok("balance")["response"]:
         t = b.get("token")
-        if isinstance(t, dict) and t.get("name") == name:
-            return b["tokenid"]
-    return None
+        if not isinstance(t, dict) or t.get("name") != name:
+            continue
+        if size is not None and str(t.get("size")) != str(size):
+            continue
+        if script is not None:
+            on_chain = rpc_ok(f"tokens tokenid:{b['tokenid']}")["response"]
+            if (on_chain.get("script") or "") != script:
+                continue
+        matches.append(b["tokenid"])
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"ambiguous: {len(matches)} tokens named '{name}' match this "
+            f"collection - resolve manually before re-running")
+    return matches[0] if matches else None
 
 
 def token_coins(tid):
@@ -112,7 +128,7 @@ def main():
     script = token_script(creator_pk)
 
     # ---- Phase 1: tokencreate ----------------------------------------------
-    tid = find_token(name)
+    tid = find_token(name, script, size)
     if tid:
         print(f"[1/3] token already exists: {tid}")
     else:
@@ -134,7 +150,8 @@ def main():
             cmd += f" webvalidate:{cfg['webvalidate']}"
         print(f"[1/3] minting '{name}' x{size}...")
         rpc_ok(cmd)
-        tid = wait_for("token in balance", lambda: find_token(name))
+        tid = wait_for("token in balance",
+                       lambda: find_token(name, script, size))
         print(f"      tokenid: {tid}")
     wait_for("mint coin confirmed", lambda: token_coins(tid))
 

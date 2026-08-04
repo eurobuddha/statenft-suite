@@ -1274,8 +1274,19 @@ function doTransfer() {
     MDS.cmd("txndelete id:" + id, function () {});
   };
 
-  // keepstate TRUE demands the ENTIRE state be recreated - every port verbatim
-  var states = (c.state || []).map(function (s) {
+  // keepstate TRUE demands the ENTIRE state be recreated - every port verbatim.
+  // State can be hostile on legacy collections, and the node parses these
+  // commands by whitespace, so refuse rather than replay anything unexpected.
+  var st = c.state || [];
+  for (var si = 0; si < st.length; si++) {
+    if (!/^[0-9]+$/.test("" + st[si].port) ||
+        !engineSafeStateValue(st[si].data)) {
+      status.innerText = "refusing to transfer: this coin carries malformed " +
+        "state (port " + st[si].port + ")";
+      return;
+    }
+  }
+  var states = st.map(function (s) {
     return "txnstate id:" + id + " port:" + s.port + " value:" + s.data;
   });
 

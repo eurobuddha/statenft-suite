@@ -8,6 +8,7 @@ Safeguards: the literal CONFIRM-<name> token is required; web-validated
 collections are refused without --force. THIS IS IRREVERSIBLE.
 """
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -27,6 +28,14 @@ def rpc_ok(cmd):
     if not d.get("status"):
         raise RuntimeError(f"{cmd[:80]} -> {d.get('error')}")
     return d
+
+def safe_state_value(v):
+    """Coin state is replayed verbatim into `txnstate ... value:<data>`. On
+    legacy collections a holder can write arbitrary state, and the node parses
+    the command by whitespace - so accept only shapes we ever write: digits, or
+    a [base64] bracket string."""
+    v = str(v)
+    return bool(re.fullmatch(r"[0-9]+", v) or re.fullmatch(r"\[[A-Za-z0-9+/=]*\]", v))
 
 
 def main():
@@ -56,7 +65,6 @@ def main():
     time.sleep(5)
 
     # creator pk (for unstamped-coin bypass under either contract generation)
-    import re
     m = re.search(r"SIGNEDBY\((0x[0-9A-Fa-f]+)\)", t.get("script", ""))
     creator_pk = m.group(1) if m else None
 
@@ -83,16 +91,25 @@ def main():
             rpc_ok(f"txnbasics id:{txn}")
             rpc_ok(f"txnpost id:{txn}")
 
+        # State we cannot safely replay (malformed, or hostile on a legacy
+        # collection) is buried stripped rather than echoed back to the node.
+        replayable = all(
+            re.fullmatch(r"[0-9]+", str(s["port"])) and safe_state_value(s["data"])
+            for s in c.get("state", []))
         try:
-            try:
-                attempt(preserve=True)
-            except RuntimeError as e:
-                if "size too large" in str(e) and creator_pk:
-                    print(f"  {cid[:18]}... oversized state - stripped "
-                          f"burial via creator bypass")
-                    attempt(preserve=False)
-                else:
-                    raise
+            if not replayable:
+                print(f"  {cid[:18]}... unsafe state - burying stripped")
+                attempt(preserve=False)
+            else:
+                try:
+                    attempt(preserve=True)
+                except RuntimeError as e:
+                    if "size too large" in str(e) and creator_pk:
+                        print(f"  {cid[:18]}... oversized state - stripped "
+                              f"burial via creator bypass")
+                        attempt(preserve=False)
+                    else:
+                        raise
             print(f"  entombed {cid[:18]}... (item {s0 or 'unstamped'})")
         finally:
             rpc(f"txndelete id:{txn}")

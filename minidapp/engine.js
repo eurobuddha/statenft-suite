@@ -54,6 +54,18 @@ function engineStamped(coin) {
 
 function engineSqlEsc(s) { return ("" + s).replace(/'/g, "''"); }
 
+/* Coin state is replayed verbatim into `txnstate ... value:<data>` when we
+ * preserve identity. On legacy collections a holder can write ARBITRARY state
+ * (the VERIFYOUT keepstate flaw above), and the node parses that command by
+ * whitespace - so a crafted value could inject extra parameters. Accept only
+ * shapes we ever write: digits, or a [base64] bracket string. */
+function engineSafeStateValue(v) {
+  v = "" + v;
+  if (/^[0-9]+$/.test(v)) { return true; }
+  if (/^\[[A-Za-z0-9+/=]*\]$/.test(v)) { return true; }
+  return false;
+}
+
 function engineCmd(c, ok, fail) {
   MDS.cmd(c, function (res) {
     if (res.status) { ok(res); }
@@ -582,9 +594,28 @@ function enginePhaseBury(row, tip, done) {
           " storestate:true"
       ];
       var st = c.state || [];
+      var unsafe = false;
       for (var i = 0; i < st.length; i++) {
+        if (!/^[0-9]+$/.test("" + st[i].port) ||
+            !engineSafeStateValue(st[i].data)) { unsafe = true; break; }
         steps.push("txnstate id:" + id + " port:" + st[i].port +
                    " value:" + st[i].data);
+      }
+      if (unsafe) {
+        // malformed/hostile state - bury it stripped rather than replaying it
+        steps = [
+          "txninput id:" + id + " coinid:" + c.coinid,
+          "txnoutput id:" + id + " amount:" + c.tokenamount +
+            " address:" + GRAVEYARD + " tokenid:" + row.TOKENID +
+            " storestate:false",
+          "txnsign id:" + id + " publickey:auto"
+        ];
+        if (row.CREATORPK) {
+          steps.push("txnsign id:" + id + " publickey:" + row.CREATORPK);
+        }
+        enginePostTxn(id, steps, next,
+          function (e) { engineSetError(row, e, next); });
+        return;
       }
       steps.push("txnsign id:" + id + " publickey:auto");
       if (engineStamped(c) === null && row.CREATORPK) {

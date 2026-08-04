@@ -8,6 +8,7 @@ rebuilds it at the recipient with identical state so the token script's
 VERIFYOUT(... keepstate TRUE) check passes.
 """
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -26,6 +27,14 @@ def rpc_ok(cmd):
     if not d.get("status"):
         raise RuntimeError(f"{cmd[:80]} -> {d.get('error')}")
     return d
+
+def safe_state_value(v):
+    """Coin state is replayed verbatim into `txnstate ... value:<data>`. On
+    legacy collections a holder can write arbitrary state, and the node parses
+    the command by whitespace - so accept only shapes we ever write: digits, or
+    a [base64] bracket string."""
+    v = str(v)
+    return bool(re.fullmatch(r"[0-9]+", v) or re.fullmatch(r"\[[A-Za-z0-9+/=]*\]", v))
 
 
 def main():
@@ -51,6 +60,10 @@ def main():
         # the token script demands the ENTIRE state be recreated (keepstate
         # TRUE) - re-issue every state port verbatim (incl. embedded images)
         for s in coin.get("state", []):
+            if not re.fullmatch(r"[0-9]+", str(s["port"])) \
+                    or not safe_state_value(s["data"]):
+                raise RuntimeError(
+                    f"refusing to transfer: malformed state at port {s['port']}")
             rpc_ok(f"txnstate id:{txn} port:{s['port']} value:{s['data']}")
         rpc_ok(f"txnsign id:{txn} publickey:auto")
         rpc_ok(f"txnbasics id:{txn}")
