@@ -1,0 +1,1383 @@
+/* StateNFT Suite — "Private Viewing" UI.
+ * Minting is executed by service.js (engine.js state machine); this page
+ * writes collections into SQL and renders live progress.
+ */
+
+/* Transfers carry an embedded image TWICE (input coin proof + recreated
+ * output state), so item images stay <= 8000 b64 chars; wallet icons ride in
+ * token metadata (proven cheap) at <= 6000. */
+var IMG_BUDGET = 8000;
+var ICON_BUDGET = 6000;
+
+var TOKENID = "";
+var META = null;          // metadata of the open collection
+var OPEN_ROW = null;      // SQL row when viewing a listed collection
+var CURRENT = null;       // coin being transferred
+var WIZ_IMAGES = [];      // base64 per wizard slot
+var WIZ_ICON = "";        // base64 wallet icon (upload)
+
+function $(id) { return document.getElementById(id); }
+
+/* ---------- helpers ---------- */
+
+function stateVar(coin, port) {
+  var s = coin.state || [];
+  for (var i = 0; i < s.length; i++) {
+    if (s[i].port == port) { return "" + s[i].data; }
+  }
+  return null;
+}
+
+function toast(msg, ms) {
+  var t = $("toast");
+  t.innerText = msg;
+  t.classList.remove("hidden");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function () { t.classList.add("hidden"); }, ms || 4000);
+}
+
+function shortHash(h) {
+  if (!h || h.length < 16) { return h || ""; }
+  return h.substring(0, 8) + "…" + h.substring(h.length - 6);
+}
+
+function copyText(txt, el) {
+  function mark() {
+    if (!el) { return; }
+    el.classList.add("copied");
+    setTimeout(function () { el.classList.remove("copied"); }, 900);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(mark, mark);
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = txt; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy");
+    document.body.removeChild(ta); mark();
+  }
+  toast("copied " + shortHash(txt));
+}
+
+function hashChip(el, full) {
+  el.innerText = shortHash(full) + " ⧉";
+  el.onclick = function (e) { e.stopPropagation(); copyText(full, el); };
+}
+
+function placeholderSVG(idx) {
+  var svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>" +
+    "<rect width='200' height='200' fill='#0D0D11'/>" +
+    "<circle cx='100' cy='88' r='52' fill='none' stroke='#D8B76E' stroke-opacity='0.55' stroke-width='1.5'/>" +
+    "<text x='100' y='102' font-family='Georgia' font-style='italic' font-size='40' fill='#D8B76E' text-anchor='middle'>" + idx + "</text>" +
+    "<text x='100' y='170' font-family='monospace' font-size='9' letter-spacing='4' fill='#8B8B98' text-anchor='middle'>STATE NFT</text>" +
+    "</svg>";
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+function iconSrc(icon) {
+  if (!icon) { return null; }
+  if (icon.indexOf("<artimage>") === 0) {
+    return "data:image/jpeg;base64," + icon.substring(10);
+  }
+  if (icon.indexOf("http") === 0) { return icon; }
+  return "data:image/jpeg;base64," + icon;
+}
+
+function coinImage(coin, idx) {
+  var p1 = coin ? stateVar(coin, 1) : null;
+  if (p1) {
+    return "data:image/jpeg;base64," + p1.replace(/^\[/, "").replace(/\]$/, "");
+  }
+  if (META && META.mode !== "embed" && META.base) {
+    return META.base + idx + (META.ext || ".png");
+  }
+  return placeholderSVG(idx);
+}
+
+/* ---------- web-validation shield (wallet-style badge) ---------- */
+
+var VALID_CACHE = {};   // tokenid -> { web, url, block }
+var CUR_BLOCK = 0;
+
+function shieldSVG() {
+  return "<svg viewBox='0 0 24 24' aria-hidden='true'>" +
+    "<path d='M12 2 L20 5 V11 C20 16.5 16.6 20.4 12 22 C7.4 20.4 4 16.5 4 11 V5 Z'" +
+    " fill='#D8B76E'/>" +
+    "<path d='M8.2 11.8 L11 14.6 L16 9.2' stroke='#14100A' stroke-width='2.4'" +
+    " fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+}
+
+function makeShield(cls, url) {
+  var el = document.createElement("span");
+  el.className = "vshield " + cls;
+  el.title = "web validated · " + (url || "");
+  el.innerHTML = shieldSVG();
+  el.onclick = function (e) {
+    e.stopPropagation();
+    if (url) { window.open(url, "_blank", "noopener"); }
+  };
+  return el;
+}
+
+function checkValidation(tid, cb) {
+  if (!tid) { cb(null); return; }
+  var c = VALID_CACHE[tid];
+  if (c && CUR_BLOCK - c.block < 20) { cb(c); return; }
+  MDS.cmd("tokenvalidate tokenid:" + tid, function (res) {
+    var v = { web: false, url: "", block: CUR_BLOCK };
+    if (res.status && res.response && res.response.web) {
+      v.web = !!res.response.web.valid;
+      v.url = res.response.web.url || "";
+    }
+    VALID_CACHE[tid] = v;
+    cb(v);
+  });
+}
+
+function attachShield(container, cls, tid) {
+  checkValidation(tid, function (v) {
+    var old = container.querySelector(".vshield");
+    if (old) { old.remove(); }
+    if (!v || !v.web) { return; }
+    // the hero plate shield only makes sense on a visible icon
+    if (cls === "vshield-plate" && $("d-icon").classList.contains("hidden")) { return; }
+    container.appendChild(makeShield(cls, v.url));
+  });
+}
+
+/* ---------- navigation ---------- */
+
+function show(view) {
+  ["view-collections", "view-create", "view-detail"].forEach(function (v) {
+    $(v).classList.add("hidden");
+  });
+  $(view).classList.remove("hidden");
+  $("tab-collections").classList.toggle("tab-active", view === "view-collections");
+  $("tab-create").classList.toggle("tab-active", view === "view-create");
+}
+
+/* ---------- collections home ---------- */
+
+function skeletons(container, cls, n) {
+  container.innerHTML = "";
+  for (var i = 0; i < n; i++) {
+    var s = document.createElement("div");
+    s.className = "skel " + cls;
+    container.appendChild(s);
+  }
+}
+
+function loadCollectionList() {
+  MDS.sql("SELECT * FROM collections ORDER BY id DESC", function (res) {
+    var rows = res.rows || [];
+    var list = $("collection-list");
+    list.innerHTML = "";
+    $("collections-empty").classList.toggle("hidden", rows.length > 0);
+    var live = rows.filter(function (r) { return r.PHASE !== "BURIED"; });
+    var buried = rows.filter(function (r) { return r.PHASE === "BURIED"; });
+    live.forEach(function (row) { list.appendChild(collectionCard(row)); });
+    if (buried.length) {
+      var head = document.createElement("p");
+      head.className = "graveyard-head";
+      head.style.gridColumn = "1 / -1";
+      head.innerText = "Graveyard · " + buried.length + " buried";
+      list.appendChild(head);
+      buried.forEach(function (row) {
+        var card = collectionCard(row);
+        card.classList.add("buried");
+        list.appendChild(card);
+      });
+    }
+  });
+}
+
+function collectionCard(row) {
+  var el = document.createElement("div");
+  el.className = "collection-card";
+  var phase = row.PHASE;
+  var badge;
+  if (phase === "DONE") {
+    badge = "<span class='badge badge-done'>◆ minted</span>";
+  } else if (phase === "BURIED") {
+    badge = "<span class='badge badge-buried'>&#8224; buried</span>";
+  } else if (phase === "BURY") {
+    badge = "<span class='badge badge-live'>&#8224; burying&hellip;</span>";
+  } else if (phase === "NEEDIMAGES") {
+    badge = "<span class='badge badge-err'>✕ needs images</span>";
+  } else if (row.ERROR) {
+    badge = "<span class='badge badge-err'>✕ error</span>";
+  } else {
+    badge = "<span class='badge badge-live'>◐ minting · " + phase.toLowerCase() + "</span>";
+  }
+  var who = (parseInt(row.ISCREATOR, 10) === 1)
+    ? "<span class='badge badge-done'>◆ minted by you</span>"
+    : "<span class='badge badge-dim'>third-party</span>";
+
+  el.innerHTML =
+    "<div class='cc-cover'></div>" +
+    "<div class='cc-strip'>" +
+    "<div class='cc-name'>" + row.NAME + "</div>" +
+    "<div class='cc-meta'>" + row.SIZE + " items · " +
+    (row.MODE === "embed" ? "on-chain" : "hosted") + "</div>" +
+    "<div class='cc-badges'>" + badge + who + "</div></div>";
+
+  setCover(el.querySelector(".cc-cover"), row);
+  if (row.TOKENID) { attachShield(el, "vshield-card", row.TOKENID); }
+  el.onclick = function () { openOwn(row); };
+  return el;
+}
+
+function setCover(coverEl, row) {
+  function apply(src) {
+    // preload so a dead URL falls back to icon/placeholder instead of blank
+    var probe = new Image();
+    probe.onload = function () {
+      coverEl.style.backgroundImage = "url(\"" + src + "\")";
+    };
+    probe.onerror = function () {
+      var fb = iconSrc(row.ICON) || placeholderSVG(1);
+      if (fb !== src) { coverEl.style.backgroundImage = "url(\"" + fb + "\")"; }
+    };
+    probe.src = src;
+  }
+  // 1. item #1 image from our items table (created collections)
+  MDS.sql("SELECT image FROM items WHERE collectionid=" + row.ID +
+          " AND idx=1", function (r) {
+    var img = (r.rows && r.rows.length) ? r.rows[0].IMAGE : "";
+    if (img) {
+      apply(img.indexOf("http") === 0 ? img : "data:image/jpeg;base64," + img);
+      return;
+    }
+    // 2. url-mode derivable
+    if (row.MODE === "url" && row.BASE) {
+      apply(row.BASE + "1" + (row.EXT || ".png"));
+      return;
+    }
+    // 3. embed-mode adopted: pull item #1's image from coin state
+    if (row.TOKENID) {
+      MDS.cmd("coins relevant:true tokenid:" + row.TOKENID, function (res) {
+        var cs = res.status ? res.response : [];
+        for (var i = 0; i < cs.length; i++) {
+          if (stateVar(cs[i], 0) === "1" && stateVar(cs[i], 1)) {
+            apply("data:image/jpeg;base64," +
+                  stateVar(cs[i], 1).replace(/^\[/, "").replace(/\]$/, ""));
+            return;
+          }
+        }
+        apply(iconSrc(row.ICON) || placeholderSVG(1));
+      });
+      return;
+    }
+    apply(iconSrc(row.ICON) || placeholderSVG(1));
+  });
+}
+
+function openOwn(row) {
+  OPEN_ROW = row;
+  TOKENID = row.TOKENID || "";
+  META = { name: row.NAME, description: row.DESCRIPTION, mode: row.MODE,
+           base: row.BASE, ext: row.EXT, size: parseInt(row.SIZE, 10),
+           url: row.ICON };
+  showDetail();
+}
+
+function openExternal(tid) {
+  tid = tid.trim();
+  if (tid.indexOf("0x") !== 0) { toast("tokenid must start 0x"); return; }
+  MDS.cmd("tokens tokenid:" + tid, function (res) {
+    if (!res.status) { toast("token not found on this node"); return; }
+    OPEN_ROW = null;
+    TOKENID = tid;
+    var t = res.response;
+    META = (typeof t.name === "object") ? t.name : { name: "" + t.name };
+    if (!META.size) { META.size = parseInt(t.total) || 0; }
+    META.script = t.script || "";
+    rememberOpened(tid, META, t.script || "");
+    showDetail();
+  });
+}
+
+function rememberOpened(tid, meta, script) {
+  MDS.sql("SELECT id FROM collections WHERE tokenid='" + tid + "'", function (r) {
+    if (r.rows && r.rows.length) { return; }
+    var m = ("" + script).match(/SIGNEDBY\((0x[0-9A-Fa-f]+)\)/);
+    var pk = m ? m[1] : "";
+    function insert(iscreator) {
+      MDS.sql(
+        "INSERT INTO collections (name,description,mode,size,base,ext,tokenid," +
+        "phase,posted,creatoraddr,creatorpk,origin,icon,iscreator) VALUES ('" +
+        engineSqlEsc(meta.name || "Unknown") + "','" +
+        engineSqlEsc(meta.description || "") + "','" + (meta.mode || "url") +
+        "'," + (parseInt(meta.size, 10) || 0) + ",'" +
+        engineSqlEsc(meta.base || "") + "','" + engineSqlEsc(meta.ext || "") +
+        "','" + tid + "','DONE',1,'','" + pk + "','opened','" +
+        engineSqlEsc(meta.url || "") + "'," + (iscreator ? 1 : 0) + ")",
+        function () { loadCollectionList(); });
+    }
+    if (!pk) { insert(false); return; }
+    MDS.cmd("keys action:list publickey:" + pk, function (kr) {
+      var keys = kr.status && kr.response ? (kr.response.keys || kr.response) : [];
+      var mine = false;
+      (keys.length ? keys : []).forEach(function (k) {
+        if (k.publickey === pk) { mine = true; }
+      });
+      insert(mine);
+    });
+  });
+}
+
+/* ---------- detail : Catalogue Raisonné ---------- */
+
+var FILTER = "all";
+var SORT_ASC = true;
+var INSPECT = null;    // { idx, byIdx, mineIds, size } while the Loupe is open
+
+function showDetail() {
+  show("view-detail");
+  FILTER = "all"; SORT_ASC = true;
+  syncFilterTabs();
+  $("d-name").innerText = META.name || "Untitled";
+  $("d-desc").innerText = META.description || "";
+
+  var ic = iconSrc(META.url);
+  $("d-icon").classList.toggle("hidden", !ic);
+  $("hero-ambient").style.backgroundImage = ic ? "url(\"" + ic + "\")" : "none";
+  if (ic) { $("d-icon").src = ic; }
+
+  $("d-owner").classList.toggle("hidden", !META.owner);
+  if (META.owner) { $("d-owner").innerText = "by " + META.owner; }
+  var iscreator = OPEN_ROW && parseInt(OPEN_ROW.ISCREATOR, 10) === 1;
+  $("d-creator").classList.toggle("hidden", !iscreator);
+
+  var ext = META.external_url || (OPEN_ROW && OPEN_ROW.EXTERNALURL) || "";
+  $("d-external").classList.toggle("hidden", !ext);
+  if (ext) {
+    $("d-external").href = ext;
+    $("d-external").innerText =
+      ext.replace(/^https?:\/\//, "").substring(0, 34) + " ↗";
+  }
+
+  if (TOKENID) { hashChip($("d-tokenid"), TOKENID); }
+  else { $("d-tokenid").innerText = "token not created yet"; }
+
+  $("ledger").classList.toggle("hidden", !TOKENID);
+  $("holdings").classList.add("hidden");
+  $("filter-row").classList.add("hidden");
+  $("contract-pre").classList.add("hidden");
+  if (TOKENID) {
+    refreshProvenance();
+    attachShield($("plate-wrap"), "vshield-plate", TOKENID);
+  }
+
+  skeletons($("gallery"), "skel-nft", Math.min(META.size || 4, 8));
+  refreshDetail();
+}
+
+function ledgerState(rowEl, state) {   // 'ok' | 'bad' | 'none' | 'pending'
+  rowEl.classList.remove("lr-ok", "lr-bad", "lr-pending");
+  var g = rowEl.querySelector(".lr-glyph");
+  if (state === "ok") { rowEl.classList.add("lr-ok"); g.innerHTML = "&#9670;"; }
+  else if (state === "bad") { rowEl.classList.add("lr-bad"); g.innerHTML = "&#10005;"; }
+  else if (state === "pending") { rowEl.classList.add("lr-pending"); g.innerHTML = "&#9670;"; }
+  else { g.innerHTML = "&#9476;"; }
+}
+
+function refreshProvenance() {
+  ledgerState($("lr-sig"), "pending");
+  ledgerState($("lr-web"), "pending");
+  MDS.cmd("tokenvalidate tokenid:" + TOKENID, function (res) {
+    if (!res.status) {
+      ledgerState($("lr-sig"), "none");
+      $("lr-sig-val").innerText = "validation unavailable";
+      ledgerState($("lr-web"), "none");
+      $("lr-web-val").innerText = "—";
+      return;
+    }
+    var v = res.response;
+    var sig = v.signature || {};
+    if (sig.signed && sig.valid) {
+      ledgerState($("lr-sig"), "ok");
+      $("lr-sig-val").innerText = shortHash(sig.signedby) + " · signed · valid";
+    } else if (sig.signed) {
+      ledgerState($("lr-sig"), "bad");
+      $("lr-sig-val").innerText = "signature INVALID";
+    } else {
+      ledgerState($("lr-sig"), "none");
+      $("lr-sig-val").innerText = "unsigned";
+    }
+    var web = v.web || {};
+    // keep the shield cache + hero badge in sync with the freshest check
+    VALID_CACHE[TOKENID] = { web: !!web.valid, url: web.url || "", block: CUR_BLOCK };
+    attachShield($("plate-wrap"), "vshield-plate", TOKENID);
+    function webLink(url) {
+      return "<a class='lr-link' href='" + url + "' target='_blank' " +
+             "rel='noopener' onclick='event.stopPropagation()'>" + url + "</a>";
+    }
+    if (web.webvalidate && web.valid) {
+      ledgerState($("lr-web"), "ok");
+      $("lr-web-val").innerHTML = webLink(web.url || "") +
+        " · valid ✓ (re-checked each block)";
+    } else if (web.webvalidate) {
+      ledgerState($("lr-web"), "bad");
+      $("lr-web-val").innerHTML = webLink(web.url || "") + " · " +
+        (web.reason || "invalid");
+    } else {
+      ledgerState($("lr-web"), "none");
+      $("lr-web-val").innerText = "no web proof declared";
+    }
+  });
+  MDS.cmd("tokens tokenid:" + TOKENID, function (res) {
+    if (!res.status) { return; }
+    var t = res.response;
+    if (t.script) {
+      META.script = t.script;
+      $("lr-contract-val").innerText =
+        "KISS VM · " + META.script.length + " chars — view script";
+      $("contract-pre").innerText = META.script;
+    }
+    // enrich hero from on-chain metadata (owner/external_url/icon are not in
+    // the local DB for dapp-created rows)
+    if (typeof t.name === "object") {
+      if (t.name.owner && !META.owner) {
+        META.owner = t.name.owner;
+        $("d-owner").classList.remove("hidden");
+        $("d-owner").innerText = "by " + META.owner;
+      }
+      if (t.name.external_url && !META.external_url) {
+        META.external_url = t.name.external_url;
+        $("d-external").classList.remove("hidden");
+        $("d-external").href = META.external_url;
+        $("d-external").innerText = META.external_url
+          .replace(/^https?:\/\//, "").substring(0, 34) + " ↗";
+      }
+      if (t.name.url && !META.url) {
+        META.url = t.name.url;
+        var ic = iconSrc(META.url);
+        if (ic) {
+          $("d-icon").classList.remove("hidden");
+          $("d-icon").src = ic;
+          $("hero-ambient").style.backgroundImage = "url(\"" + ic + "\")";
+        }
+      }
+    }
+  });
+}
+
+function refreshDetail() {
+  if ($("view-detail").classList.contains("hidden")) { return; }
+  if (OPEN_ROW) {
+    MDS.sql("SELECT * FROM collections WHERE id=" + OPEN_ROW.ID, function (res) {
+      if (res.rows && res.rows.length) { OPEN_ROW = res.rows[0]; }
+      TOKENID = OPEN_ROW.TOKENID || TOKENID;
+      if (TOKENID) { hashChip($("d-tokenid"), TOKENID); }
+      renderProgress();
+      renderGallery();
+    });
+  } else {
+    $("mint-progress").classList.add("hidden");
+    $("need-images").classList.add("hidden");
+    renderGallery();
+  }
+}
+
+var RAIL_ORDER = ["CREATE", "MOVE", "SPLIT", "STAMP", "DONE"];
+
+function renderProgress() {
+  var box = $("mint-progress");
+  if (OPEN_ROW && OPEN_ROW.PHASE === "NEEDIMAGES") {
+    box.classList.add("hidden");
+    renderNeedImages();
+    return;
+  }
+  $("need-images").classList.add("hidden");
+  if (!OPEN_ROW || OPEN_ROW.PHASE === "DONE") { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+
+  var at = RAIL_ORDER.indexOf(OPEN_ROW.PHASE);
+  $("rail-fill").style.width = (at / (RAIL_ORDER.length - 1) * 100) + "%";
+  var nodes = box.querySelectorAll(".rail-node");
+  for (var i = 0; i < nodes.length; i++) {
+    nodes[i].className = "rail-node" + (i < at ? " done" : (i === at ? " now" : ""));
+  }
+  $("mint-error").innerText = OPEN_ROW.ERROR || "";
+
+  MDS.sql("SELECT idx, coinid FROM items WHERE collectionid=" + OPEN_ROW.ID +
+          " ORDER BY idx", function (res) {
+    var rows = res.rows || [];
+    var done = 0;
+    var chips = $("stamp-chips");
+    chips.innerHTML = "";
+    rows.forEach(function (r) {
+      if (r.COINID) { done++; }
+      var c = document.createElement("span");
+      c.className = "chip" + (r.COINID ? " chip-done" : "");
+      c.innerText = "#" + r.IDX;
+      chips.appendChild(c);
+    });
+    $("mp-count").innerText = rows.length
+      ? "No. " + done + " / " + rows.length + " stamped" : "";
+  });
+}
+
+function renderGallery() {
+  var g = $("gallery");
+  if (!TOKENID) { g.innerHTML = ""; return; }
+  MDS.cmd("coins relevant:true tokenid:" + TOKENID, function (mineRes) {
+    var mine = mineRes.status ? mineRes.response : [];
+    var mineIds = {};
+    mine.forEach(function (c) { mineIds[c.coinid] = true; });
+    MDS.cmd("coins tokenid:" + TOKENID, function (allRes) {
+      var all = allRes.status ? allRes.response : [];
+      var seen = {};
+      var coins = [];
+      all.concat(mine).forEach(function (c) {
+        if (!seen[c.coinid]) { seen[c.coinid] = true; coins.push(c); }
+      });
+      renderCards(coins, mineIds);
+    });
+  });
+}
+
+function itemStatus(coin, mineIds) {
+  if (!coin) { return "unseen"; }
+  if (coin.address === GRAVEYARD) { return "entombed"; }
+  return mineIds[coin.coinid] ? "mine" : "held";
+}
+
+function renderCards(coins, mineIds) {
+  var byIdx = {};
+  var rawMine = 0;   // ALL owned coins of the token, stamped or not
+  coins.forEach(function (c) {
+    if (mineIds[c.coinid]) { rawMine++; }
+    var idx = stateVar(c, 0);
+    if (idx !== null && idx !== "0") { byIdx[idx] = c; }
+  });
+  var size = META.size || Object.keys(byIdx).length;
+  LAST = { byIdx: byIdx, mineIds: mineIds, size: size, rawMine: rawMine };
+
+  // holdings distribution (entombed counts with held for the bar)
+  var counts = { mine: 0, held: 0, unseen: 0, entombed: 0 };
+  for (var i = 1; i <= size; i++) {
+    counts[itemStatus(byIdx["" + i], mineIds)]++;
+  }
+  counts.held += counts.entombed;
+  // danger row: EVERY listed collection offers exactly one action -
+  // own coins -> bury (on-chain, safeguarded); own nothing -> remove the
+  // list entry (bookkeeping only). Hidden only mid-burial.
+  var burying = OPEN_ROW && OPEN_ROW.PHASE === "BURY";
+  $("danger-row").classList.toggle("hidden", !OPEN_ROW || burying);
+  $("bury-btn").classList.toggle("hidden", !(rawMine > 0));
+  $("remove-btn").classList.toggle("hidden", rawMine > 0);
+  $("holdings").classList.remove("hidden");
+  var line = "No. " + counts.mine + " of " + size + " in this wallet";
+  if (counts.held) { line += " — " + counts.held + " held elsewhere"; }
+  if (counts.unseen) { line += (counts.held ? "," : " —") + " " + counts.unseen + " unseen"; }
+  $("holdings-line").innerText = line;
+  $("hb-mine").style.width = (counts.mine / size * 100) + "%";
+  $("hb-held").style.width = (counts.held / size * 100) + "%";
+  $("hb-unseen").style.width = (counts.unseen / size * 100) + "%";
+  $("holdings-stat").innerText = "items " + size + " · supply " + size;
+
+  // filter + sort
+  $("filter-row").classList.remove("hidden");
+  var order = [];
+  for (var n = 1; n <= size; n++) { order.push(n); }
+  if (!SORT_ASC) { order.reverse(); }
+
+  var g = $("gallery");
+  g.innerHTML = "";
+  var shown = 0;
+  order.forEach(function (n) {
+    var coin = byIdx["" + n];
+    var st = itemStatus(coin, mineIds);
+    var fst = st === "entombed" ? "held" : st;
+    if (FILTER !== "all" && fst !== FILTER) { return; }
+    shown++;
+    var owned = st === "mine";
+    var card = document.createElement("div");
+    card.className = "card";
+    var badge;
+    if (!coin) { badge = "<span class='card-owner owner-unknown'>unseen</span>"; }
+    else if (st === "entombed") { badge = "<span class='card-owner owner-other'>&#8224; entombed</span>"; }
+    else if (owned) { badge = "<span class='card-owner owner-mine'>◆ mine</span>"; }
+    else { badge = "<span class='card-owner owner-other'>held</span>"; }
+    card.innerHTML =
+      badge +
+      "<div class='card-frame'><img alt='No. " + n + "' src='" + coinImage(coin, n) + "'" +
+      " style='opacity:0' onload='this.style.opacity=1'" +
+      " onerror=\"this.onerror=null;this.src=placeholderSVG(" + n + ");this.style.opacity=1\"/></div>" +
+      "<div class='card-body'>" +
+      "<div class='card-index'>No. " + n + "</div>" +
+      "<span class='chip-hash'></span>" +
+      (owned ? "<button class='btn btn-gold'>Transfer</button>" : "") +
+      "</div>";
+
+    var chip = card.querySelector(".chip-hash");
+    if (coin) { hashChip(chip, coin.coinid); }
+    else { chip.innerText = "not tracked"; }
+
+    if (owned) {
+      card.querySelector("button").onclick = (function (c, ix) {
+        return function (e) { e.stopPropagation(); openModal(c, ix); };
+      })(coin, n);
+    }
+    card.onclick = (function (ix) {
+      return function () { openInspector(ix); };
+    })(n);
+    g.appendChild(card);
+  });
+  $("showing").innerText = shown + "/" + size;
+  if (INSPECT) { fillInspector(INSPECT.idx); }   // live-refresh open Loupe
+}
+
+var LAST = null;
+
+function syncFilterTabs() {
+  Array.prototype.forEach.call(document.querySelectorAll(".ftab[data-f]"), function (t) {
+    t.classList.toggle("ftab-active", t.getAttribute("data-f") === FILTER);
+  });
+  $("sort-btn").innerHTML = SORT_ASC ? "No.&nbsp;&uarr;" : "No.&nbsp;&darr;";
+}
+
+/* ---------- The Loupe : item inspector ---------- */
+
+function openInspector(idx) {
+  if (!LAST) { return; }
+  INSPECT = { idx: idx };
+  document.body.style.overflow = "hidden";
+  $("inspector").classList.remove("hidden");
+  fillInspector(idx);
+  document.addEventListener("keydown", inspectorKeys);
+}
+
+function closeInspector() {
+  INSPECT = null;
+  resetZoom();
+  $("inspector").classList.add("hidden");
+  document.body.style.overflow = "";
+  document.removeEventListener("keydown", inspectorKeys);
+}
+
+function fillInspector(idx) {
+  INSPECT.idx = idx;
+  var size = LAST.size;
+  var coin = LAST.byIdx["" + idx];
+  var st = itemStatus(coin, LAST.mineIds);
+  resetZoom();
+
+  var img = $("insp-img");
+  img.style.opacity = 0;
+  var src = coinImage(coin, idx);
+  img.onload = function () { img.style.opacity = 1; };
+  img.onerror = function () { img.onerror = null; img.src = placeholderSVG(idx); };
+  img.src = src;
+  // pre-decode neighbours
+  [idx % size + 1, (idx + size - 2) % size + 1].forEach(function (n) {
+    var pre = new Image(); pre.src = coinImage(LAST.byIdx["" + n], n);
+  });
+
+  $("insp-caption-no").innerText = "· No. " + idx + " ·";
+  $("lot-no").innerText = "No. " + idx;
+  $("lot-of").innerText = "of " + size;
+  $("lot-coll").innerText = META.name || "";
+  var v = VALID_CACHE[TOKENID];
+  var lotShield = $("lot-coll").parentNode.querySelector(".vshield");
+  if (lotShield) { lotShield.remove(); }
+  if (v && v.web) {
+    $("lot-coll").parentNode.insertBefore(
+      makeShield("vshield-inline", v.url), $("lot-owner"));
+  }
+
+  var badge = $("lot-owner");
+  badge.className = "card-owner lot-badge " +
+    (st === "mine" ? "owner-mine" : st === "held" ? "owner-other" : "owner-unknown");
+  badge.innerText = st === "mine" ? "◆ mine" : st;
+
+  hashChip($("lot-token"), TOKENID);
+  if (coin) {
+    hashChip($("lot-coin"), coin.coinid);
+    hashChip($("lot-addr"), coin.address);
+  } else {
+    $("lot-coin").innerText = "not tracked";
+    $("lot-addr").innerText = "—";
+  }
+
+  $("cert-s0").innerText = "STATE:0 → " + idx + " · lot number";
+  var p1 = coin ? stateVar(coin, 1) : null;
+  $("cert-s1").innerText = p1
+    ? "STATE:1 → image · " + (p1.length - 2).toLocaleString() + " chars embedded"
+    : (META.mode === "url" ? "image hosted at base URL" : "STATE:1 → not visible on this node");
+
+  var tip = parseInt(($("block-info").innerText || "").replace(/\D/g, ""), 10) || 0;
+  if (coin && coin.created && tip) {
+    var created = parseInt(coin.created, 10);
+    var age = Math.max(0, tip - created);
+    var days = Math.round(age * 50 / 86400 * 10) / 10;
+    $("lot-age").innerText = age.toLocaleString() + " blocks · ≈ " + days + " days";
+    $("lot-minted").innerText = "minted " + created.toLocaleString();
+    $("lot-now").innerText = "now " + tip.toLocaleString();
+  } else {
+    $("lot-age").innerText = "—";
+    $("lot-minted").innerText = "minted";
+    $("lot-now").innerText = "now";
+  }
+
+  $("lot-desc").innerText = META.description || "";
+  var ext = META.external_url || "";
+  $("lot-external").classList.toggle("hidden", !ext);
+  if (ext) {
+    $("lot-external").href = ext;
+    $("lot-external").innerText = ext.replace(/^https?:\/\//, "").substring(0, 30) + " ↗";
+  }
+
+  var mine = st === "mine";
+  $("lot-transfer").classList.toggle("hidden", !mine);
+  $("lot-copy").classList.toggle("hidden", !coin);
+  $("lot-heldnote").classList.toggle("hidden", mine || !coin);
+  $("lot-transfer").onclick = function () { if (coin) { openModal(coin, idx); } };
+  $("lot-copy").onclick = function () { if (coin) { copyText(coin.coinid, null); } };
+}
+
+function inspNav(dir) {
+  if (!INSPECT || !LAST) { return; }
+  var n = INSPECT.idx + dir;
+  if (n < 1) { n = LAST.size; }
+  if (n > LAST.size) { n = 1; }
+  fillInspector(n);
+}
+
+/* zoom: toggle scale(2.5) aimed at the pointer; pan by pointer while zoomed */
+var ZOOMED = false;
+
+function resetZoom() {
+  ZOOMED = false;
+  var f = $("insp-frame");
+  f.classList.remove("zoomed");
+  $("insp-img").style.transform = "";
+}
+
+function inspectorZoom(e) {
+  var f = $("insp-frame");
+  var img = $("insp-img");
+  var r = f.getBoundingClientRect();
+  var x = ((e.clientX - r.left) / r.width * 100).toFixed(1);
+  var y = ((e.clientY - r.top) / r.height * 100).toFixed(1);
+  if (!ZOOMED) {
+    ZOOMED = true;
+    f.classList.add("zoomed");
+    img.style.transformOrigin = x + "% " + y + "%";
+    img.style.transform = "scale(2.5)";
+  } else {
+    resetZoom();
+  }
+}
+
+function inspectorAim(e) {
+  if (!ZOOMED) { return; }
+  var f = $("insp-frame");
+  var r = f.getBoundingClientRect();
+  var x = Math.max(0, Math.min(100, (e.clientX - r.left) / r.width * 100));
+  var y = Math.max(0, Math.min(100, (e.clientY - r.top) / r.height * 100));
+  var img = $("insp-img");
+  img.style.transition = "none";
+  img.style.transformOrigin = x.toFixed(1) + "% " + y.toFixed(1) + "%";
+}
+
+function inspectorKeys(e) {
+  if (e.key === "ArrowLeft") { inspNav(-1); }
+  else if (e.key === "ArrowRight") { inspNav(1); }
+  else if (e.key === "Escape") {
+    if (ZOOMED) { resetZoom(); } else { closeInspector(); }
+  } else if (e.key === "z" || e.key === "Z" || e.key === "Enter") {
+    var f = $("insp-frame");
+    var r = f.getBoundingClientRect();
+    inspectorZoom({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+  } else if ((e.key === "t" || e.key === "T") && INSPECT) {
+    var coin = LAST.byIdx["" + INSPECT.idx];
+    if (coin && LAST.mineIds[coin.coinid]) { openModal(coin, INSPECT.idx); }
+  } else if ((e.key === "c" || e.key === "C") && INSPECT) {
+    var c2 = LAST.byIdx["" + INSPECT.idx];
+    if (c2) { copyText(c2.coinid, null); }
+  }
+}
+
+/* touch: swipe to navigate / close */
+var TOUCH = null;
+
+function inspTouchStart(e) {
+  if (e.touches.length === 1) {
+    TOUCH = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+}
+
+function inspTouchEnd(e) {
+  if (!TOUCH) { return; }
+  var dx = e.changedTouches[0].clientX - TOUCH.x;
+  var dy = e.changedTouches[0].clientY - TOUCH.y;
+  TOUCH = null;
+  if (ZOOMED) { return; }
+  if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) {
+    inspNav(dx < 0 ? 1 : -1);
+  } else if (dy >= 80) {
+    closeInspector();
+  }
+}
+
+/* ---------- NEEDIMAGES recovery ---------- */
+
+var NEED_IMAGES = {};
+var NEED_COUNT = 0;
+
+function renderNeedImages() {
+  var box = $("need-images");
+  box.classList.remove("hidden");
+  MDS.cmd("coins relevant:true tokenid:" + TOKENID, function (res) {
+    var stamped = {};
+    (res.status ? res.response : []).forEach(function (c) {
+      var idx = stateVar(c, 0);
+      if (idx !== null) { stamped[idx] = true; }
+    });
+    var slots = $("need-slots");
+    slots.innerHTML = "";
+    var size = parseInt(OPEN_ROW.SIZE, 10);
+    NEED_COUNT = 0;
+    var missing = [];
+    for (var mi = 1; mi <= size; mi++) {
+      if (!stamped["" + mi]) { missing.push(mi); }
+    }
+    if (missing.length === 0) {
+      // stale record: the chain says every item is stamped - heal to DONE
+      box.classList.add("hidden");
+      MDS.sql("UPDATE collections SET phase='DONE', error='' WHERE id=" +
+              OPEN_ROW.ID, function () {
+        toast("All items are already stamped on-chain — collection is complete");
+        refreshDetail();
+      });
+      return;
+    }
+    $("need-status").innerText = missing.length + " of " + size +
+      " items still need images";
+    for (var i = 1; i <= size; i++) {
+      if (stamped["" + i]) { continue; }
+      NEED_COUNT++;
+      (function (idx) {
+        var slot = document.createElement("label");
+        slot.className = "image-slot";
+        var img = NEED_IMAGES[idx];
+        slot.innerHTML =
+          (img ? "<img src='data:image/jpeg;base64," + img + "'/>"
+               : "<span class='slot-num'>" + idx + "</span><span class='slot-hint'>add image</span>") +
+          "<input type='file' accept='image/*' class='slot-input'/>";
+        slot.querySelector("input").onchange = function (e) {
+          var f = e.target.files[0];
+          if (!f) { return; }
+          compressImage(f, IMG_BUDGET, function (b64) {
+            if (!b64) { toast("could not process image"); return; }
+            NEED_IMAGES[idx] = b64;
+            renderNeedImages();
+          });
+        };
+        slots.appendChild(slot);
+      })(i);
+    }
+  });
+}
+
+function saveNeedImages() {
+  var idxs = Object.keys(NEED_IMAGES);
+  if (idxs.length < NEED_COUNT) {
+    $("need-status").innerText = "all " + NEED_COUNT +
+      " missing items need an image before the mint can resume";
+    return;
+  }
+  var pending = idxs.slice();
+  (function insertNext() {
+    if (!pending.length) {
+      MDS.sql("UPDATE collections SET phase='MOVE', error='' WHERE id=" +
+              OPEN_ROW.ID, function () {
+        NEED_IMAGES = {};
+        MDS.comms.solo("mint", function () {});
+        toast("Resuming mint in the background");
+        refreshDetail();
+      });
+      return;
+    }
+    var idx = pending.shift();
+    MDS.sql("DELETE FROM items WHERE collectionid=" + OPEN_ROW.ID +
+            " AND idx=" + idx, function () {
+      MDS.sql("INSERT INTO items (collectionid,idx,image) VALUES (" +
+              OPEN_ROW.ID + "," + idx + ",'" + NEED_IMAGES[idx] + "')",
+              insertNext);
+    });
+  })();
+}
+
+/* ---------- The Graveyard : burial with safeguards ---------- */
+
+var BURY_ARMED = false;
+var BURY_TIMER = null;
+
+function openBuryModal() {
+  if (!OPEN_ROW || !LAST) { return; }
+  BURY_ARMED = false;
+  clearTimeout(BURY_TIMER);
+  $("bury-title").innerText = "Bury " + (META.name || "this collection");
+  hashChip($("bury-tokenid"), TOKENID);
+  $("bury-confirm").value = "";
+  $("bury-go").disabled = true;
+  $("bury-go").classList.remove("armed");
+  $("bury-go").innerText = "Bury forever";
+  $("bury-status").innerText = "";
+
+  var thumbs = $("bury-thumbs");
+  thumbs.innerHTML = "";
+  var mine = 0, held = 0;
+  for (var n = 1; n <= LAST.size; n++) {
+    var coin = LAST.byIdx["" + n];
+    var st = itemStatus(coin, LAST.mineIds);
+    if (st === "mine") {
+      mine++;
+      var img = document.createElement("img");
+      img.src = coinImage(coin, n);
+      img.onerror = (function (ix) {
+        return function () { this.onerror = null; this.src = placeholderSVG(ix); };
+      })(n);
+      thumbs.appendChild(img);
+    } else if (st === "held") { held++; }
+  }
+  var raw = LAST.rawMine || mine;
+  $("bury-count").innerHTML = "You are about to bury <b>" + raw +
+    " coin" + (raw === 1 ? "" : "s") + "</b>" +
+    (mine < raw ? " (" + mine + " stamped, " + (raw - mine) + " unstamped)"
+                : " — " + mine + " of " + LAST.size + " items") + ".";
+
+  var v = VALID_CACHE[TOKENID];
+  $("bury-warn-shield").classList.toggle("hidden", !(v && v.web));
+  $("bury-warn-held").classList.toggle("hidden", held === 0);
+  if (held > 0) {
+    $("bury-warn-held").innerHTML = "&#9888; Collectors hold <b>" + held +
+      " item" + (held === 1 ? "" : "s") + "</b> of this collection. Burying " +
+      "yours does not affect theirs — but the collection lives on without you.";
+  }
+  $("bury-backdrop").classList.remove("hidden");
+}
+
+function closeBuryModal() {
+  $("bury-backdrop").classList.add("hidden");
+  BURY_ARMED = false;
+  clearTimeout(BURY_TIMER);
+}
+
+function buryConfirmInput() {
+  var match = $("bury-confirm").value.trim() === (META.name || "").trim();
+  $("bury-go").disabled = !match;
+  if (!match && BURY_ARMED) {
+    BURY_ARMED = false;
+    $("bury-go").classList.remove("armed");
+    $("bury-go").innerText = "Bury forever";
+  }
+}
+
+function buryGo() {
+  if ($("bury-go").disabled || !OPEN_ROW) { return; }
+  if (!BURY_ARMED) {
+    BURY_ARMED = true;
+    $("bury-go").classList.add("armed");
+    $("bury-go").innerText = "Click again — forever means forever";
+    BURY_TIMER = setTimeout(function () {
+      BURY_ARMED = false;
+      $("bury-go").classList.remove("armed");
+      $("bury-go").innerText = "Bury forever";
+    }, 5000);
+    return;
+  }
+  clearTimeout(BURY_TIMER);
+  MDS.sql("UPDATE collections SET phase='BURY', error='' WHERE id=" +
+          OPEN_ROW.ID, function () {
+    MDS.comms.solo("bury", function () {});
+    closeBuryModal();
+    toast("Burial begun — items are being carried to the graveyard");
+    refreshDetail();
+    loadCollectionList();
+  });
+}
+
+/* remove-from-list: no chain effect - just forgets the row (armed 2-click) */
+var REMOVE_ARMED = false;
+var REMOVE_TIMER = null;
+
+function removeFromList() {
+  if (!OPEN_ROW) { return; }
+  if (!REMOVE_ARMED) {
+    REMOVE_ARMED = true;
+    $("remove-btn").classList.add("armed");
+    $("remove-btn").innerText = "Click again to remove";
+    REMOVE_TIMER = setTimeout(function () {
+      REMOVE_ARMED = false;
+      $("remove-btn").classList.remove("armed");
+      $("remove-btn").innerText = "Remove from list";
+    }, 5000);
+    return;
+  }
+  clearTimeout(REMOVE_TIMER);
+  REMOVE_ARMED = false;
+  var id = OPEN_ROW.ID;
+  MDS.sql("DELETE FROM items WHERE collectionid=" + id, function () {
+    MDS.sql("DELETE FROM collections WHERE id=" + id, function () {
+      toast("Removed from your list — you hold no coins of it, nothing " +
+            "changed on-chain");
+      $("remove-btn").classList.remove("armed");
+      $("remove-btn").innerText = "Remove from list";
+      show("view-collections");
+      loadCollectionList();
+    });
+  });
+}
+
+/* ---------- create wizard ---------- */
+
+function wizardMode() {
+  var radios = document.getElementsByName("c-mode");
+  for (var i = 0; i < radios.length; i++) {
+    if (radios[i].checked) { return radios[i].value; }
+  }
+  return "embed";
+}
+
+function rebuildSlots() {
+  var n = Math.max(2, Math.min(20, parseInt($("c-size").value, 10) || 0));
+  var box = $("image-slots");
+  box.innerHTML = "";
+  WIZ_IMAGES.length = n;
+  for (var i = 1; i <= n; i++) {
+    (function (idx) {
+      var slot = document.createElement("label");
+      slot.className = "image-slot";
+      var img = WIZ_IMAGES[idx - 1];
+      slot.innerHTML =
+        (img ? "<img src='data:image/jpeg;base64," + img + "'/>"
+             : "<span class='slot-num'>" + idx + "</span><span class='slot-hint'>add image</span>") +
+        "<input type='file' accept='image/*' class='slot-input'/>";
+      slot.querySelector("input").onchange = function (e) {
+        var f = e.target.files[0];
+        if (!f) { return; }
+        compressImage(f, IMG_BUDGET, function (b64) {
+          if (!b64) { toast("could not process image"); return; }
+          WIZ_IMAGES[idx - 1] = b64;
+          rebuildSlots();
+        });
+      };
+      box.appendChild(slot);
+    })(i);
+  }
+}
+
+function compressImage(file, budget, cb) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var img = new Image();
+    img.onload = function () {
+      var dim = 400, q = 0.8;
+      function attempt() {
+        var cv = document.createElement("canvas");
+        var scale = Math.min(1, dim / Math.max(img.width, img.height));
+        cv.width = Math.max(1, Math.round(img.width * scale));
+        cv.height = Math.max(1, Math.round(img.height * scale));
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        var b64 = cv.toDataURL("image/jpeg", q).split(",")[1];
+        if (b64.length <= budget) { cb(b64); return; }
+        if (q > 0.45) { q -= 0.15; }
+        else if (dim > 100) { dim = Math.round(dim * 0.75); q = 0.8; }
+        else { cb(""); return; }
+        attempt();
+      }
+      attempt();
+    };
+    img.onerror = function () { cb(null); };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function mintCollection() {
+  var name = $("c-name").value.trim();
+  var size = Math.max(2, Math.min(20, parseInt($("c-size").value, 10) || 0));
+  var desc = $("c-desc").value.trim();
+  var mode = wizardMode();
+  var base = $("c-base").value.trim();
+  var ext = $("c-ext").value.trim() || ".png";
+  var iconurl = $("c-iconurl").value.trim();
+  var icon = iconurl || WIZ_ICON;   // hosted URL beats upload (URLs can animate)
+  var webvalidate = $("c-webvalidate").value.trim();
+  var externalurl = $("c-externalurl").value.trim();
+  var status = $("create-status");
+  if (webvalidate && webvalidate.indexOf("http") !== 0) {
+    status.innerText = "web validation must be a full https:// URL"; return;
+  }
+  if (externalurl && externalurl.indexOf("http") !== 0) {
+    status.innerText = "external URL must be a full https:// URL"; return;
+  }
+
+  if (!name) { status.innerText = "name required"; return; }
+  if (mode === "url" && base.indexOf("http") !== 0) {
+    status.innerText = "base URL required for hosted mode"; return;
+  }
+  if (mode === "embed") {
+    for (var i = 0; i < size; i++) {
+      if (!WIZ_IMAGES[i]) {
+        status.innerText = "image missing for item #" + (i + 1); return;
+      }
+    }
+  }
+
+  status.innerText = "preparing...";
+  MDS.cmd("getaddress", function (res) {
+    if (!res.status) { status.innerText = "getaddress failed"; return; }
+    var addr = res.response.address;
+    var pk = res.response.publickey;
+    MDS.sql(
+      "INSERT INTO collections (name,description,mode,size,base,ext,phase," +
+      "posted,creatoraddr,creatorpk,origin,icon,webvalidate,externalurl) VALUES ('" +
+      engineSqlEsc(name) + "','" + engineSqlEsc(desc) + "','" + mode + "'," +
+      size + ",'" + engineSqlEsc(base) + "','" + engineSqlEsc(ext) +
+      "','CREATE',0,'" + addr + "','" + pk + "','created','" +
+      engineSqlEsc(icon) + "','" + engineSqlEsc(webvalidate) + "','" +
+      engineSqlEsc(externalurl) + "')",
+      /* iscreator set right after insert (column order safety) */
+      function () {
+        MDS.sql("SELECT id FROM collections WHERE name='" + engineSqlEsc(name) +
+                "' ORDER BY id DESC LIMIT 1", function (r2) {
+          var cid = r2.rows[0].ID;
+          MDS.sql("UPDATE collections SET iscreator=1 WHERE id=" + cid,
+                  function () {});
+          var items = [];
+          for (var i = 1; i <= size; i++) {
+            items.push({ i: i, img: mode === "embed" ? WIZ_IMAGES[i - 1]
+                                                     : (base + i + ext) });
+          }
+          (function insertNext(k) {
+            if (k >= items.length) {
+              MDS.comms.solo("mint", function () {});
+              toast("Minting started — runs in the background");
+              WIZ_IMAGES = []; WIZ_ICON = "";
+              $("c-name").value = ""; $("c-desc").value = "";
+              $("c-iconurl").value = ""; $("c-webvalidate").value = "";
+              $("c-externalurl").value = "";
+              $("icon-glyph").innerText = "+";
+              loadCollectionList();
+              MDS.sql("SELECT * FROM collections WHERE id=" + cid, function (r3) {
+                openOwn(r3.rows[0]);
+              });
+              return;
+            }
+            MDS.sql("INSERT INTO items (collectionid,idx,image) VALUES (" +
+                    cid + "," + items[k].i + ",'" + items[k].img + "')",
+                    function () { insertNext(k + 1); });
+          })(0);
+        });
+      });
+  });
+}
+
+/* ---------- transfer (full-state preserving) ---------- */
+
+function openModal(coin, idx) {
+  CURRENT = { coin: coin, idx: idx };
+  $("modal-title").innerText = "Item No. " + idx;
+  hashChip($("modal-coin"), coin.coinid);
+  $("modal-status").innerText = "";
+  $("recipient").value = "";
+  $("modal-backdrop").classList.remove("hidden");
+}
+
+function closeModal() { $("modal-backdrop").classList.add("hidden"); CURRENT = null; }
+
+function step(cmd, next, fail) {
+  MDS.cmd(cmd, function (res) {
+    if (!res.status) { fail(res.error || cmd); return; }
+    next(res);
+  });
+}
+
+function doTransfer() {
+  if (!CURRENT) { return; }
+  var to = $("recipient").value.trim();
+  if (!(to.indexOf("0x") === 0 || to.indexOf("Mx") === 0)) {
+    $("modal-status").innerText = "invalid address"; return;
+  }
+  var c = CURRENT.coin, idx = CURRENT.idx;
+  var id = "statenft" + Date.now();
+  var status = $("modal-status");
+  var fail = function (e) {
+    status.innerText = "failed: " + e;
+    MDS.cmd("txndelete id:" + id, function () {});
+  };
+
+  // keepstate TRUE demands the ENTIRE state be recreated - every port verbatim
+  var states = (c.state || []).map(function (s) {
+    return "txnstate id:" + id + " port:" + s.port + " value:" + s.data;
+  });
+
+  status.innerText = "building transaction...";
+  step("txncreate id:" + id, function () {
+    step("txninput id:" + id + " coinid:" + c.coinid, function () {
+      step("txnoutput id:" + id + " amount:1 address:" + to +
+           " tokenid:" + TOKENID + " storestate:true", function () {
+        (function setState(k) {
+          if (k >= states.length) {
+            status.innerText = "signing...";
+            step("txnsign id:" + id + " publickey:auto", function () {
+              step("txnbasics id:" + id, function () {
+                step("txnpost id:" + id, function () {
+                  MDS.cmd("txndelete id:" + id, function () {});
+                  status.innerText = "posted — awaiting confirmation...";
+                  watchDeparture(c.coinid, idx);
+                }, fail);
+              }, fail);
+            }, fail);
+            return;
+          }
+          step(states[k], function () { setState(k + 1); }, fail);
+        })(0);
+      }, fail);
+    }, fail);
+  }, fail);
+}
+
+function watchDeparture(coinid, idx) {
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries++;
+    MDS.cmd("coins relevant:true tokenid:" + TOKENID, function (res) {
+      var still = (res.status ? res.response : []).some(function (c) {
+        return c.coinid === coinid;
+      });
+      if (!still) {
+        clearInterval(timer);
+        closeModal();
+        toast("Item No. " + idx + " transferred — identity intact");
+        refreshDetail();
+      } else if (tries > 20) {
+        clearInterval(timer);
+        var s = $("modal-status");
+        if (s) { s.innerText = "not confirmed after ~7 min — the spend may have been rejected"; }
+      }
+    });
+  }, 20000);
+}
+
+/* ---------- boot ---------- */
+
+function setBlock(b) {
+  CUR_BLOCK = parseInt(b, 10) || CUR_BLOCK;
+  var chip = $("block-info");
+  chip.innerText = "block " + b;
+  chip.classList.add("tick");
+  setTimeout(function () { chip.classList.remove("tick"); }, 700);
+}
+
+MDS.init(function (msg) {
+  if (msg.event === "inited") {
+    engineInitTables(function () { loadCollectionList(); });
+    MDS.cmd("block", function (res) {
+      if (res.status) { setBlock(res.response.block); }
+    });
+  } else if (msg.event === "NEWBLOCK") {
+    var b = msg.data && msg.data.txpow ? msg.data.txpow.header.block : null;
+    if (b) { setBlock(b); }
+    loadCollectionList();
+    refreshDetail();
+    if (TOKENID && !$("view-detail").classList.contains("hidden")) {
+      refreshProvenance();
+    }
+  } else if (msg.event === "NEWBALANCE") {
+    refreshDetail();
+  }
+});
+
+$("tab-collections").onclick = function () { show("view-collections"); loadCollectionList(); };
+$("tab-create").onclick = function () { show("view-create"); rebuildSlots(); };
+$("back-btn").onclick = function () { show("view-collections"); loadCollectionList(); };
+$("open-btn").onclick = function () { openExternal($("tokenid-input").value); };
+$("tokenid-input").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") { openExternal(this.value); }
+});
+$("rescan-btn").onclick = function () {
+  toast("Scanning wallet for StateNFT collections...");
+  engineAdopt(function () { loadCollectionList(); toast("Rescan complete"); });
+};
+$("need-save-btn").onclick = saveNeedImages;
+$("c-size").onchange = rebuildSlots;
+Array.prototype.forEach.call(document.getElementsByName("c-mode"), function (r) {
+  r.onchange = function () {
+    var url = wizardMode() === "url";
+    $("url-fields").classList.toggle("hidden", !url);
+    $("embed-fields").classList.toggle("hidden", url);
+  };
+});
+function onIconPick(e) {
+  var f = e.target.files[0];
+  if (!f) { return; }
+  compressImage(f, ICON_BUDGET, function (b64) {
+    if (!b64) { toast("could not process icon"); return; }
+    WIZ_ICON = b64;
+    $("icon-slot").innerHTML =
+      "<img src='data:image/jpeg;base64," + b64 + "'/>" +
+      "<input type='file' accept='image/*' class='slot-input' id='icon-file'/>";
+    $("icon-file").onchange = onIconPick;
+  });
+}
+$("icon-file").onchange = onIconPick;
+$("mint-btn").onclick = mintCollection;
+$("bury-btn").onclick = openBuryModal;
+$("remove-btn").onclick = removeFromList;
+$("bury-cancel").onclick = closeBuryModal;
+$("bury-go").onclick = buryGo;
+$("bury-confirm").addEventListener("input", buryConfirmInput);
+$("bury-backdrop").addEventListener("click", function (e) {
+  if (e.target === this) { closeBuryModal(); }
+});
+$("cancel-btn").onclick = closeModal;
+$("send-btn").onclick = doTransfer;
+$("modal-backdrop").addEventListener("click", function (e) {
+  if (e.target === this) { closeModal(); }
+});
+
+/* Catalogue Raisonné controls */
+Array.prototype.forEach.call(document.querySelectorAll(".ftab[data-f]"), function (t) {
+  t.onclick = function () {
+    FILTER = t.getAttribute("data-f");
+    syncFilterTabs();
+    renderGallery();
+  };
+});
+$("sort-btn").onclick = function () {
+  SORT_ASC = !SORT_ASC;
+  syncFilterTabs();
+  renderGallery();
+};
+$("lr-contract").onclick = function () {
+  $("contract-pre").classList.toggle("hidden");
+};
+$("lr-sig").onclick = $("lr-web").onclick = function () {
+  if (!TOKENID) { return; }
+  toast("re-checking provenance...");
+  refreshProvenance();
+};
+$("lr-sig").title = $("lr-web").title = "click to re-verify";
+$("lr-sig").style.cursor = $("lr-web").style.cursor = "pointer";
+$("hb-mine").onclick = function () { FILTER = "mine"; syncFilterTabs(); renderGallery(); };
+$("hb-held").onclick = function () { FILTER = "held"; syncFilterTabs(); renderGallery(); };
+$("hb-unseen").onclick = function () { FILTER = "unseen"; syncFilterTabs(); renderGallery(); };
+
+/* The Loupe controls */
+$("insp-close").onclick = closeInspector;
+$("insp-prev").onclick = function () { inspNav(-1); };
+$("insp-next").onclick = function () { inspNav(1); };
+$("insp-frame").onclick = inspectorZoom;
+$("insp-frame").addEventListener("mousemove", inspectorAim);
+$("insp-stage").addEventListener("touchstart", inspTouchStart, { passive: true });
+$("insp-stage").addEventListener("touchend", inspTouchEnd, { passive: true });
+$("insp-stage").addEventListener("click", function (e) {
+  if (e.target === this) { closeInspector(); }
+});

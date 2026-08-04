@@ -1,0 +1,12 @@
+{
+  "name": "EuroBuddha Collection",
+  "description": "NFT collection - one tokenid, unique per-coin images",
+  "owner": "eurobuddha",
+  "size": 5,
+  "base": "https://eurobuddha.com/nft/collection1/",
+  "ext": ".png",
+  "external_url": "https://eurobuddha.com/nft/collection1/index.html",
+  "webvalidate": "",
+  "creator_pubkey": "0xC9B6654E90F2163BC66E209F311DCE02F6E201F4AD922A823C67443FBEAFF6BA",
+  "creator_address": "0xC1242210B61A89918C9F17340DB263A4479A0A7E89413B4DEFC6B6396DD054CD"
+}

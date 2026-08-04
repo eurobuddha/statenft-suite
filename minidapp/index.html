@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StateNFT Suite</title>
+<link rel="stylesheet" href="styles.css?v=342">
+<script type="text/javascript" src="mds.js?v=342"></script>
+<script type="text/javascript" src="engine.js?v=342"></script>
+</head>
+<body>
+<div class="beam"></div>
+
+<header class="masthead">
+  <div class="mast-row">
+    <div>
+      <p class="masthead-kicker">Minima &middot; One TokenID &middot; Many Faces</p>
+      <h1 class="wordmark">STATENFT</h1>
+    </div>
+    <span id="block-info" class="block-chip">block &mdash;</span>
+  </div>
+  <nav class="nav">
+    <button id="tab-collections" class="tab tab-active">Collections</button>
+    <button id="tab-create" class="tab">Create</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ COLLECTIONS ============ -->
+  <section id="view-collections">
+    <div class="tokenbar">
+      <input id="tokenid-input" type="text" spellcheck="false"
+             placeholder="open any collection by tokenid  0x&hellip;" />
+      <button id="open-btn" class="btn btn-ghost">Open</button>
+      <button id="rescan-btn" class="btn btn-ghost"
+              title="rediscover StateNFT collections held in this wallet">Rescan</button>
+    </div>
+    <div id="collection-list" class="collection-list"></div>
+    <div id="collections-empty" class="empty-state hidden">
+      <p class="empty-glyph">&#9670;</p>
+      <p>Nothing on view &mdash; create a collection, or open one by tokenid.</p>
+    </div>
+  </section>
+
+  <!-- ============ CREATE ============ -->
+  <section id="view-create" class="hidden">
+    <div class="wizard">
+      <h2 class="wizard-title">New Collection</h2>
+
+      <div class="field-grid">
+        <label>Name
+          <input id="c-name" type="text" maxlength="64" placeholder="My Collection" />
+        </label>
+        <label>Items
+          <input id="c-size" type="number" min="2" max="20" value="5" />
+        </label>
+        <label class="field-wide">Description
+          <input id="c-desc" type="text" maxlength="256" placeholder="optional" />
+        </label>
+        <label class="field-wide">Web validation URL
+          <input id="c-webvalidate" type="text" maxlength="512"
+                 placeholder="optional &mdash; https://yoursite.com/proofs/mycollection.txt (a public .txt you host containing the tokenid, provable via tokenvalidate)" />
+        </label>
+        <label class="field-wide">External URL
+          <input id="c-externalurl" type="text" maxlength="512"
+                 placeholder="optional &mdash; https://yoursite.com/mycollection.html (collection homepage, stored in token metadata)" />
+        </label>
+      </div>
+
+      <div class="mode-row">
+        <span class="flabel">Wallet icon &mdash; shown for this token in the regular Minima wallet</span>
+        <div class="icon-row">
+          <input id="c-iconurl" type="text"
+                 placeholder="hosted image or GIF URL (https://...) &mdash; use this for ANIMATED icons" />
+          <label class="icon-slot" id="icon-slot"
+                 title="or upload an image — becomes a small STATIC thumbnail embedded on-chain">
+            <span id="icon-glyph">+</span>
+            <input type="file" accept="image/*" class="slot-input" id="icon-file"/>
+          </label>
+        </div>
+        <span class="flabel" style="text-transform:none;letter-spacing:0.02em;margin-top:0.4rem">
+          Animated GIF icons must be hosted URLs &mdash; uploads are embedded on-chain but always static.</span>
+      </div>
+
+      <div class="mode-row">
+        <span class="flabel">Image storage</span>
+        <label class="radio"><input type="radio" name="c-mode" value="embed" checked />
+          <span>On-chain &mdash; upload images, embedded as thumbnails in each coin</span></label>
+        <label class="radio"><input type="radio" name="c-mode" value="url" />
+          <span>Hosted &mdash; you host <span class="mono">base + index + ext</span> yourself</span></label>
+      </div>
+
+      <div id="url-fields" class="field-grid hidden">
+        <label class="field-wide">Base URL
+          <input id="c-base" type="text" placeholder="https://mysite.com/nft/collection/" />
+        </label>
+        <label>Extension
+          <input id="c-ext" type="text" value=".png" />
+        </label>
+      </div>
+
+      <div id="embed-fields">
+        <span class="flabel">Images &mdash; auto-compressed to stay transferable on-chain</span>
+        <div id="image-slots" class="image-slots"></div>
+      </div>
+
+      <div class="wizard-actions">
+        <button id="mint-btn" class="btn btn-gold">Mint Collection</button>
+      </div>
+      <p class="cert-note" style="margin-top:0.8rem">Locked edition: every
+        identity is sealed by consensus the moment it is stamped &mdash; not
+        even you, the creator, can ever alter an item&rsquo;s number or image
+        afterwards. Check your images carefully before minting.</p>
+      <p id="create-status" class="modal-status"></p>
+    </div>
+  </section>
+
+  <!-- ============ DETAIL : Catalogue Raisonné ============ -->
+  <section id="view-detail" class="hidden">
+    <button id="back-btn" class="btn btn-ghost btn-back">&larr; Collections</button>
+
+    <div class="hero">
+      <div id="hero-ambient" class="hero-ambient"></div>
+      <div class="hero-inner">
+        <span class="plate-wrap" id="plate-wrap">
+          <img id="d-icon" class="hero-plate hidden" alt="" />
+        </span>
+        <div class="hero-text">
+          <h2 id="d-name" class="detail-title"></h2>
+          <p id="d-desc" class="detail-desc"></p>
+          <p class="hero-byline">
+            <span id="d-owner" class="hero-owner hidden"></span>
+            <span id="d-creator" class="badge badge-done hidden">&#9670; minted by you</span>
+          </p>
+          <p class="hero-chips">
+            <span id="d-tokenid" class="chip-hash" title="tap to copy"></span>
+            <a id="d-external" class="chip-hash chip-link hidden" target="_blank"
+               rel="noopener"></a>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div id="ledger" class="ledger hidden">
+      <p class="mp-kicker">Provenance</p>
+      <div class="ledger-row" id="lr-sig">
+        <span class="lr-glyph">&#9670;</span>
+        <span class="lr-label">Signature</span>
+        <span class="lr-value mono" id="lr-sig-val">checking&hellip;</span>
+      </div>
+      <div class="ledger-row" id="lr-web">
+        <span class="lr-glyph">&#9670;</span>
+        <span class="lr-label">Web proof</span>
+        <span class="lr-value mono" id="lr-web-val">checking&hellip;</span>
+      </div>
+      <div class="ledger-row ledger-toggle" id="lr-contract">
+        <span class="lr-glyph">&#9656;</span>
+        <span class="lr-label">Contract</span>
+        <span class="lr-value mono" id="lr-contract-val">KISS VM</span>
+      </div>
+      <pre id="contract-pre" class="contract-pre hidden"></pre>
+    </div>
+
+    <div id="holdings" class="holdings hidden">
+      <p class="mp-kicker">Holdings</p>
+      <p id="holdings-line" class="mp-count"></p>
+      <div class="holdings-bar">
+        <div id="hb-mine" class="hb-seg hb-mine" title="mine"></div>
+        <div id="hb-held" class="hb-seg hb-held" title="held elsewhere"></div>
+        <div id="hb-unseen" class="hb-seg hb-unseen" title="unseen"></div>
+      </div>
+      <p id="holdings-stat" class="holdings-stat mono"></p>
+    </div>
+
+    <div id="filter-row" class="filter-row hidden">
+      <div class="filter-tabs">
+        <button class="ftab ftab-active" data-f="all">All</button>
+        <button class="ftab" data-f="mine">Mine</button>
+        <button class="ftab" data-f="held">Held</button>
+        <button class="ftab" data-f="unseen">Unseen</button>
+      </div>
+      <div class="filter-right mono">
+        <button id="sort-btn" class="ftab">No.&nbsp;&uarr;</button>
+        <span id="showing"></span>
+      </div>
+    </div>
+
+    <div id="need-images" class="mint-progress hidden">
+      <p class="mp-kicker">Recovered collection &mdash; images needed</p>
+      <p class="need-images-note">This mint was interrupted before every item was
+        stamped. Re-supply images for the unstamped items below and the
+        background service will finish the mint.</p>
+      <div id="need-slots" class="image-slots"></div>
+      <div class="wizard-actions">
+        <button id="need-save-btn" class="btn btn-gold">Save &amp; Resume Mint</button>
+      </div>
+      <p id="need-status" class="modal-status"></p>
+    </div>
+
+    <div id="mint-progress" class="mint-progress hidden">
+      <p class="mp-kicker">Minting &mdash; runs in the background, you can close this page</p>
+      <div class="rail">
+        <div id="rail-fill" class="rail-fill"></div>
+        <div class="rail-node" style="left:0%"   data-ph="CREATE"><span>Create</span></div>
+        <div class="rail-node" style="left:25%"  data-ph="MOVE"><span>Gather</span></div>
+        <div class="rail-node" style="left:50%"  data-ph="SPLIT"><span>Split</span></div>
+        <div class="rail-node" style="left:75%"  data-ph="STAMP"><span>Stamp</span></div>
+        <div class="rail-node" style="left:100%" data-ph="DONE"><span>Done</span></div>
+      </div>
+      <p id="mp-count" class="mp-count"></p>
+      <div id="stamp-chips" class="stamp-chips"></div>
+      <p id="mint-error" class="mint-error"></p>
+    </div>
+
+    <div id="gallery" class="gallery"></div>
+
+    <div id="danger-row" class="danger-row hidden">
+      <button id="bury-btn" class="btn btn-ember hidden">Bury collection&hellip;</button>
+      <button id="remove-btn" class="btn btn-ember hidden">Remove from list</button>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <span>identities enforced by KISS&nbsp;VM token script</span>
+</footer>
+
+<!-- burial modal -->
+<div id="bury-backdrop" class="modal-backdrop hidden">
+  <div class="modal modal-bury">
+    <p class="modal-kicker modal-kicker-ember">The Graveyard</p>
+    <h2 id="bury-title" class="modal-title">Bury &mdash;</h2>
+    <span id="bury-tokenid" class="chip-hash"></span>
+    <div id="bury-thumbs" class="bury-thumbs"></div>
+    <p id="bury-count" class="bury-line"></p>
+    <p class="bury-line">Every item you hold will be sent to the public
+      graveyard address &mdash; the <span class="mono">RETURN FALSE</span>
+      contract, provably unspendable. <b>This is forever. No one, including
+      you, can ever retrieve them.</b></p>
+    <p id="bury-warn-shield" class="bury-warn hidden">&#9888; This collection is
+      <b>web-validated</b> &mdash; it carries your verified shield. Are you
+      certain it is not cherished?</p>
+    <p id="bury-warn-held" class="bury-warn hidden"></p>
+    <label class="flabel" for="bury-confirm">Type the collection name to unlock burial</label>
+    <input id="bury-confirm" type="text" spellcheck="false" autocomplete="off" />
+    <div class="modal-actions">
+      <button id="bury-cancel" class="btn btn-ghost">Keep them</button>
+      <button id="bury-go" class="btn btn-ember" disabled>Bury forever</button>
+    </div>
+    <p id="bury-status" class="modal-status"></p>
+  </div>
+</div>
+
+<!-- The Loupe : full-screen item inspector -->
+<div id="inspector" class="inspector hidden">
+  <button id="insp-close" class="insp-close" title="close (Esc)">&#10005;</button>
+  <div class="insp-stage" id="insp-stage">
+    <button id="insp-prev" class="insp-nav insp-prev" title="previous (&larr;)">&#8249;</button>
+    <div class="insp-frame" id="insp-frame">
+      <img id="insp-img" alt="" draggable="false" />
+    </div>
+    <button id="insp-next" class="insp-nav insp-next" title="next (&rarr;)">&#8250;</button>
+    <p class="insp-caption"><span id="insp-caption-no"></span></p>
+  </div>
+  <aside class="lot-sheet" id="lot-sheet">
+    <p class="mp-kicker">Private Viewing &middot; Lot</p>
+    <p class="lot-no"><span id="lot-no" class="lot-serif">No. &mdash;</span>
+      <span id="lot-of" class="lot-of"></span></p>
+    <p class="lot-title"><span id="lot-coll"></span>
+      <span id="lot-owner" class="card-owner owner-mine lot-badge"></span></p>
+
+    <div class="lot-sec">
+      <p class="lot-kicker">Provenance</p>
+      <p class="lot-row"><span class="lot-k">token</span><span id="lot-token" class="chip-hash"></span></p>
+      <p class="lot-row"><span class="lot-k">coin</span><span id="lot-coin" class="chip-hash"></span></p>
+      <p class="lot-row"><span class="lot-k">held at</span><span id="lot-addr" class="chip-hash"></span></p>
+    </div>
+
+    <div class="lot-sec">
+      <p class="lot-kicker">Certificate of Identity</p>
+      <div class="cert">
+        <p class="mono" id="cert-s0"></p>
+        <p class="mono" id="cert-s1"></p>
+        <p class="cert-note">Identity travels in coin state &mdash; the number and
+          the image are re-created verbatim on every transfer, enforced by
+          consensus. The chain is the certificate.</p>
+      </div>
+    </div>
+
+    <div class="lot-sec">
+      <p class="lot-kicker">Chronicle</p>
+      <p id="lot-age" class="lot-serif lot-age"></p>
+      <div class="rail rail-mini">
+        <div class="rail-fill" style="width:100%"></div>
+        <div class="rail-node done" style="left:0%"><span id="lot-minted"></span></div>
+        <div class="rail-node now" style="left:100%"><span id="lot-now"></span></div>
+      </div>
+    </div>
+
+    <div class="lot-sec" id="lot-holding-sec">
+      <p class="lot-kicker">Holding</p>
+      <p id="lot-desc" class="cert-note"></p>
+      <a id="lot-external" class="chip-hash chip-link hidden" target="_blank" rel="noopener"></a>
+    </div>
+
+    <div class="lot-actions">
+      <button id="lot-transfer" class="btn btn-gold">Transfer</button>
+      <button id="lot-copy" class="btn btn-ghost">Copy coin id</button>
+      <p id="lot-heldnote" class="cert-note hidden">held in another collection</p>
+    </div>
+  </aside>
+</div>
+
+<!-- transfer modal -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <p class="modal-kicker">Transfer</p>
+    <h2 id="modal-title" class="modal-title">Item #&mdash;</h2>
+    <span class="chip-hash" id="modal-coin" title="tap to copy"></span>
+    <label class="flabel" for="recipient">Recipient address (0x or Mx)</label>
+    <input id="recipient" type="text" spellcheck="false" placeholder="Mx&hellip; / 0x&hellip;" />
+    <div class="modal-actions">
+      <button id="cancel-btn" class="btn btn-ghost">Cancel</button>
+      <button id="send-btn" class="btn btn-gold">Send with identity</button>
+    </div>
+    <p id="modal-status" class="modal-status"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script type="text/javascript" src="app.js?v=342"></script>
+</body>
+</html>
