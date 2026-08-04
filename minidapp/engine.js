@@ -15,6 +15,8 @@
 
 var ENGINE_PENDING = {};      // coinid -> block height when we spent it
 var ENGINE_PENDING_TTL = 6;   // re-attempt a spend after this many blocks
+var ENGINE_CREATE_TIMEOUT = 20;  // blocks before an unconfirmed mint is retried
+var engineBoundTokenids = {};    // tokenids already claimed by a collection row
 
 /* The NFT Graveyard: address of the KISS script "RETURN FALSE" — provably
  * unspendable forever (derived on-node; deterministic; anyone can verify with
@@ -69,6 +71,17 @@ function engineEach(arr, fn, done) {
   next();
 }
 
+/* Columns added after the original schema. Append here - the loop below runs
+ * them in order, so a new migration never adds another callback level. */
+var ENGINE_MIGRATIONS = [
+  "`origin` varchar(16) DEFAULT 'created'",
+  "`icon` clob",
+  "`webvalidate` varchar(512)",
+  "`externalurl` varchar(512)",
+  "`iscreator` int DEFAULT 0",
+  "`postedat` int DEFAULT 0"
+];
+
 function engineInitTables(cb) {
   MDS.sql(
     "CREATE TABLE IF NOT EXISTS `collections` (" +
@@ -94,25 +107,9 @@ function engineInitTables(cb) {
         " `image` clob," +                     // base64 (embed) or URL (url mode)
         " `coinid` varchar(80))",
         function () {
-          MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " +
-                  "`origin` varchar(16) DEFAULT 'created'",
-                  function () {
-                    MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " +
-                            "`icon` clob",
-                            function () {
-                              MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " +
-                                      "`webvalidate` varchar(512)",
-                                      function () {
-                                        MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " +
-                                                "`externalurl` varchar(512)",
-                                                function () {
-                                                  MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " +
-                                                          "`iscreator` int DEFAULT 0",
-                                                          function () { engineBackfillCreator(cb); });
-                                                });
-                                      });
-                            });
-                  });
+          engineEach(ENGINE_MIGRATIONS, function (col, next) {
+            MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " + col, next);
+          }, function () { engineBackfillCreator(cb); });
         });
     });
 }
@@ -314,6 +311,17 @@ function enginePendingOk(coinid, tip) {
 
 function engineMarkPending(coinid, tip) { ENGINE_PENDING[coinid] = tip; }
 
+/* Drop entries older than the TTL so the map cannot grow for the lifetime of
+ * the service process. */
+function enginePrunePending(tip) {
+  for (var cid in ENGINE_PENDING) {
+    if (ENGINE_PENDING.hasOwnProperty(cid) &&
+        tip - ENGINE_PENDING[cid] >= ENGINE_PENDING_TTL) {
+      delete ENGINE_PENDING[cid];
+    }
+  }
+}
+
 function engineSetPhase(row, phase, cb) {
   MDS.log("StateNFT: collection " + row.ID + " -> " + phase);
   MDS.sql("UPDATE collections SET phase='" + phase + "', error='' " +
@@ -331,17 +339,57 @@ function engineSetError(row, err, cb) {
 function enginePhaseCreate(row, tip, done) {
   engineCmd("balance", function (res) {
     var bal = res.response || [];
-    var tid = null;
+    // Identify OUR freshly minted token by identity, not by name: names are
+    // not unique (two DLNW tokens have existed here) and anyone can mint a
+    // same-named token and send it to us. Require the exact metadata shape AND
+    // our own enforcement script, and refuse to bind when it is ambiguous.
+    var want = engineScript(row.CREATORPK, row.MODE);
+    var candidates = [];
     for (var i = 0; i < bal.length; i++) {
       var t = bal[i].token;
-      if (t && typeof t === "object" && t.name === row.NAME) { tid = bal[i].tokenid; }
+      if (t && typeof t === "object" && t.name === row.NAME &&
+          parseInt(t.size, 10) === row.SIZE && t.mode === row.MODE &&
+          !engineBoundTokenids[bal[i].tokenid]) {
+        candidates.push(bal[i].tokenid);
+      }
     }
-    if (tid) {
-      MDS.sql("UPDATE collections SET tokenid='" + tid + "' WHERE id=" + row.ID,
-        function () { engineSetPhase(row, "MOVE", done); });
+    var matches = [];   // per-call, so concurrent rows never share this
+    engineEach(candidates, function (cand, next) {
+      engineCmd("tokens tokenid:" + cand, function (tres) {
+        if (("" + (tres.response.script || "")) === want) { matches.push(cand); }
+        next();
+      }, function () { next(); });
+    }, function () {
+      if (matches.length > 1) {
+        engineSetError(row, "ambiguous mint: " + matches.length +
+          " tokens match this collection - resolve manually", done);
+        return;
+      }
+      if (matches.length === 1) {
+        var tid = matches[0];
+        MDS.sql("UPDATE collections SET tokenid='" + tid + "' WHERE id=" + row.ID,
+          function () { engineSetPhase(row, "MOVE", done); });
+        return;
+      }
+      enginePhaseCreatePost(row, tip, done);
+    });
+  }, function (e) { engineSetError(row, e, done); });
+}
+
+function enginePhaseCreatePost(row, tip, done) {
+  (function () {
+    if (row.POSTED == 1) {
+      // tokencreate was sent but the token never appeared. It may have been
+      // dropped or rejected (txnpost status cannot be trusted), so retry after
+      // a grace period instead of waiting forever with no feedback.
+      var waited = tip - (parseInt(row.POSTEDAT, 10) || 0);
+      if (!row.POSTEDAT || waited < ENGINE_CREATE_TIMEOUT) { done(); return; }
+      MDS.sql("UPDATE collections SET posted=0 WHERE id=" + row.ID, function () {
+        engineSetError(row, "tokencreate did not confirm within " +
+          ENGINE_CREATE_TIMEOUT + " blocks - retrying", done);
+      });
       return;
     }
-    if (row.POSTED == 1) { done(); return; }   // tokencreate already sent - wait
     var meta = {
       name: row.NAME,
       description: row.DESCRIPTION || "",
@@ -362,9 +410,10 @@ function enginePhaseCreate(row, tip, done) {
               " signtoken:" + row.CREATORPK;
     if (row.WEBVALIDATE) { cmd += " webvalidate:" + row.WEBVALIDATE; }
     engineCmd(cmd, function () {
-      MDS.sql("UPDATE collections SET posted=1 WHERE id=" + row.ID, done);
+      MDS.sql("UPDATE collections SET posted=1, postedat=" + tip +
+              " WHERE id=" + row.ID, done);
     }, function (e) { engineSetError(row, e, done); });
-  }, function (e) { engineSetError(row, e, done); });
+  })();
 }
 
 function enginePhaseMove(row, tip, done) {
@@ -445,10 +494,14 @@ function enginePhaseStamp(row, tip, done) {
       if (idx !== null) { used[idx] = true; stamped.push(coins[i]); }
       else if (coins[i].tokenamount === "1") { blanks.push(coins[i]); }
     }
-    // record stamped coinids on their item rows
+    // Record stamped coinids on their item rows. Coin state is written by
+    // whoever last spent the coin (legacy collections allow rewriting it), so
+    // the index is validated as digits before it reaches SQL.
     engineEach(stamped, function (c, next) {
-      MDS.sql("UPDATE items SET coinid='" + c.coinid + "' WHERE collectionid=" +
-              row.ID + " AND idx=" + engineState(c, 0), next);
+      var idx = engineStamped(c);
+      if (!/^[0-9]+$/.test("" + idx)) { next(); return; }
+      MDS.sql("UPDATE items SET coinid='" + engineSqlEsc(c.coinid) +
+              "' WHERE collectionid=" + row.ID + " AND idx=" + idx, next);
     }, function () {
       var count = 0;
       for (var u in used) { if (used.hasOwnProperty(u)) { count++; } }
@@ -466,6 +519,15 @@ function enginePhaseStamp(row, tip, done) {
         MDS.sql("SELECT image FROM items WHERE collectionid=" + row.ID +
                 " AND idx=" + idx, function (res) {
           var img = (res.rows && res.rows.length) ? res.rows[0].IMAGE : "";
+          if (row.MODE === "embed" && !img) {
+            // Stamping is irreversible under a locked edition: an item stamped
+            // without its image would be permanently imageless. Leave the coin
+            // blank and surface the problem instead.
+            free.unshift(idx);
+            engineSetError(row, "missing image for item #" + idx +
+              " - re-supply it to finish this mint", next);
+            return;
+          }
           var id = "st" + row.ID + "x" + idx;
           var steps = [
             "txninput id:" + id + " coinid:" + c.coinid,
@@ -551,21 +613,30 @@ function enginePhaseBury(row, tip, done) {
 function engineTick(cb) {
   engineCmd("block", function (bres) {
     var tip = parseInt(bres.response.block, 10);
-    MDS.sql("SELECT * FROM collections WHERE phase<>'DONE' AND phase<>'BURIED'", function (res) {
-      var rows = (res.rows || []);
-      engineEach(rows, function (row, next) {
-        row.ID = parseInt(row.ID, 10);
-        row.SIZE = parseInt(row.SIZE, 10);
-        row.POSTED = parseInt(row.POSTED, 10);
-        var ph = row.PHASE;
-        if (ph === "CREATE") { enginePhaseCreate(row, tip, next); }
-        else if (ph === "MOVE") { enginePhaseMove(row, tip, next); }
-        else if (ph === "SPLIT") { enginePhaseSplit(row, tip, next); }
-        else if (ph === "STAMP") { enginePhaseStamp(row, tip, next); }
-        else if (ph === "NEEDIMAGES") { enginePhaseNeedImages(row, next); }
-        else if (ph === "BURY") { enginePhaseBury(row, tip, next); }
-        else { next(); }
-      }, function () { if (cb) { cb(); } });
+    enginePrunePending(tip);
+    // tokenids already claimed by a row - keeps CREATE from binding to a token
+    // that belongs to another collection
+    MDS.sql("SELECT tokenid FROM collections WHERE tokenid<>''", function (bres2) {
+      engineBoundTokenids = {};
+      var brows = bres2.rows || [];
+      for (var b = 0; b < brows.length; b++) { engineBoundTokenids[brows[b].TOKENID] = true; }
+      MDS.sql("SELECT * FROM collections WHERE phase<>'DONE' AND phase<>'BURIED'",
+        function (res) {
+          var rows = (res.rows || []);
+          engineEach(rows, function (row, next) {
+            row.ID = parseInt(row.ID, 10);
+            row.SIZE = parseInt(row.SIZE, 10);
+            row.POSTED = parseInt(row.POSTED, 10);
+            var ph = row.PHASE;
+            if (ph === "CREATE") { enginePhaseCreate(row, tip, next); }
+            else if (ph === "MOVE") { enginePhaseMove(row, tip, next); }
+            else if (ph === "SPLIT") { enginePhaseSplit(row, tip, next); }
+            else if (ph === "STAMP") { enginePhaseStamp(row, tip, next); }
+            else if (ph === "NEEDIMAGES") { enginePhaseNeedImages(row, next); }
+            else if (ph === "BURY") { enginePhaseBury(row, tip, next); }
+            else { next(); }
+          }, function () { if (cb) { cb(); } });
+        });
     });
   }, function (e) {
     MDS.log("StateNFT tick failed: " + e);

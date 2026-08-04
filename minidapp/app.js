@@ -74,22 +74,44 @@ function placeholderSVG(idx) {
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
+/* Wallet icon from token metadata: either a hosted http(s) URL or the
+ * <artimage> base64 convention. Both are attacker-supplied, so the scheme is
+ * allowlisted and the payload restricted to base64 characters. */
 function iconSrc(icon) {
   if (!icon) { return null; }
-  if (icon.indexOf("<artimage>") === 0) {
-    return "data:image/jpeg;base64," + icon.substring(10);
-  }
-  if (icon.indexOf("http") === 0) { return icon; }
-  return "data:image/jpeg;base64," + icon;
+  var raw = ("" + icon).indexOf("<artimage>") === 0
+    ? ("" + icon).substring(10) : ("" + icon);
+  var hosted = safeUrl(raw);
+  if (hosted) { return hosted; }
+  if (/^[A-Za-z0-9+/=]+$/.test(raw)) { return "data:image/jpeg;base64," + raw; }
+  return null;
+}
+
+/* Safe value for a CSS url(...) - only srcs we produced (data: image) or an
+ * http(s) URL, with quotes/parens/backslashes rejected so nothing can escape
+ * the declaration. */
+function cssUrl(src) {
+  if (!src) { return ""; }
+  src = "" + src;
+  if (/["'()\\;]/.test(src)) { return ""; }
+  if (/^data:image\/(jpeg|png|gif|svg\+xml)[;,]/i.test(src)) { return src; }
+  return safeUrl(src);
 }
 
 function coinImage(coin, idx) {
   var p1 = coin ? stateVar(coin, 1) : null;
   if (p1) {
-    return "data:image/jpeg;base64," + p1.replace(/^\[/, "").replace(/\]$/, "");
+    // base64 payload from coin state: strip the bracket wrapper and allow only
+    // base64 characters, so it can never carry a different data: payload
+    var b64 = p1.replace(/^\[/, "").replace(/\]$/, "");
+    if (/^[A-Za-z0-9+/=]*$/.test(b64)) {
+      return "data:image/jpeg;base64," + b64;
+    }
+    return placeholderSVG(idx);
   }
   if (META && META.mode !== "embed" && META.base) {
-    return META.base + idx + (META.ext || ".png");
+    var base = safeUrl(META.base);        // http(s) only - no javascript:/data:
+    if (base) { return base + idx + (META.ext || ".png"); }
   }
   return placeholderSVG(idx);
 }
@@ -98,6 +120,31 @@ function coinImage(coin, idx) {
 
 var VALID_CACHE = {};   // tokenid -> { web, url, block }
 var CUR_BLOCK = 0;
+
+/* Chain metadata (token name, description, webvalidate/external URLs) is written
+ * by WHOEVER MINTED THE TOKEN — anyone can send us an NFT and have it adopted
+ * automatically. It is untrusted input: never interpolate it into markup, and
+ * never navigate to it without an http(s) scheme check. */
+function safeUrl(url) {
+  url = "" + url;
+  // http(s) only, and no characters that could break out of an attribute or a
+  // CSS declaration if this value is ever interpolated rather than assigned
+  if (!/^https?:\/\//i.test(url)) { return ""; }
+  if (/["'<>`\\\s]/.test(url)) { return ""; }
+  return url;
+}
+
+function webLinkEl(url) {
+  var a = document.createElement("a");
+  a.className = "lr-link";
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  var safe = safeUrl(url);
+  if (safe) { a.href = safe; }
+  a.textContent = url || "";          // text node - never parsed as HTML
+  a.onclick = function (e) { e.stopPropagation(); };
+  return a;
+}
 
 function shieldSVG() {
   return "<svg viewBox='0 0 24 24' aria-hidden='true'>" +
@@ -114,7 +161,8 @@ function makeShield(cls, url) {
   el.innerHTML = shieldSVG();
   el.onclick = function (e) {
     e.stopPropagation();
-    if (url) { window.open(url, "_blank", "noopener"); }
+    var safe = safeUrl(url);
+    if (safe) { window.open(safe, "_blank", "noopener,noreferrer"); }
   };
   return el;
 }
@@ -213,13 +261,16 @@ function collectionCard(row) {
     ? "<span class='badge badge-done'>◆ minted by you</span>"
     : "<span class='badge badge-dim'>third-party</span>";
 
+  // badge/who are our own literals; row.NAME is untrusted chain metadata and
+  // goes in as a text node, never as markup.
   el.innerHTML =
     "<div class='cc-cover'></div>" +
     "<div class='cc-strip'>" +
-    "<div class='cc-name'>" + row.NAME + "</div>" +
-    "<div class='cc-meta'>" + row.SIZE + " items · " +
+    "<div class='cc-name'></div>" +
+    "<div class='cc-meta'>" + (parseInt(row.SIZE, 10) || 0) + " items · " +
     (row.MODE === "embed" ? "on-chain" : "hosted") + "</div>" +
     "<div class='cc-badges'>" + badge + who + "</div></div>";
+  el.querySelector(".cc-name").textContent = row.NAME || "Untitled";
 
   setCover(el.querySelector(".cc-cover"), row);
   if (row.TOKENID) { attachShield(el, "vshield-card", row.TOKENID); }
@@ -230,15 +281,17 @@ function collectionCard(row) {
 function setCover(coverEl, row) {
   function apply(src) {
     // preload so a dead URL falls back to icon/placeholder instead of blank
+    var safe = cssUrl(src);
+    if (!safe) { safe = placeholderSVG(1); }
     var probe = new Image();
     probe.onload = function () {
-      coverEl.style.backgroundImage = "url(\"" + src + "\")";
+      coverEl.style.backgroundImage = "url(\"" + safe + "\")";
     };
     probe.onerror = function () {
-      var fb = iconSrc(row.ICON) || placeholderSVG(1);
-      if (fb !== src) { coverEl.style.backgroundImage = "url(\"" + fb + "\")"; }
+      var fb = cssUrl(iconSrc(row.ICON)) || placeholderSVG(1);
+      if (fb !== safe) { coverEl.style.backgroundImage = "url(\"" + fb + "\")"; }
     };
-    probe.src = src;
+    probe.src = safe;
   }
   // 1. item #1 image from our items table (created collections)
   MDS.sql("SELECT image FROM items WHERE collectionid=" + row.ID +
@@ -341,7 +394,8 @@ function showDetail() {
 
   var ic = iconSrc(META.url);
   $("d-icon").classList.toggle("hidden", !ic);
-  $("hero-ambient").style.backgroundImage = ic ? "url(\"" + ic + "\")" : "none";
+  var icCss = cssUrl(ic);
+  $("hero-ambient").style.backgroundImage = icCss ? "url(\"" + icCss + "\")" : "none";
   if (ic) { $("d-icon").src = ic; }
 
   $("d-owner").classList.toggle("hidden", !META.owner);
@@ -349,10 +403,10 @@ function showDetail() {
   var iscreator = OPEN_ROW && parseInt(OPEN_ROW.ISCREATOR, 10) === 1;
   $("d-creator").classList.toggle("hidden", !iscreator);
 
-  var ext = META.external_url || (OPEN_ROW && OPEN_ROW.EXTERNALURL) || "";
+  var ext = safeUrl(META.external_url || (OPEN_ROW && OPEN_ROW.EXTERNALURL) || "");
   $("d-external").classList.toggle("hidden", !ext);
   if (ext) {
-    $("d-external").href = ext;
+    $("d-external").href = safeUrl(ext);
     $("d-external").innerText =
       ext.replace(/^https?:\/\//, "").substring(0, 34) + " ↗";
   }
@@ -409,21 +463,18 @@ function refreshProvenance() {
     // keep the shield cache + hero badge in sync with the freshest check
     VALID_CACHE[TOKENID] = { web: !!web.valid, url: web.url || "", block: CUR_BLOCK };
     attachShield($("plate-wrap"), "vshield-plate", TOKENID);
-    function webLink(url) {
-      return "<a class='lr-link' href='" + url + "' target='_blank' " +
-             "rel='noopener' onclick='event.stopPropagation()'>" + url + "</a>";
-    }
-    if (web.webvalidate && web.valid) {
-      ledgerState($("lr-web"), "ok");
-      $("lr-web-val").innerHTML = webLink(web.url || "") +
-        " · valid ✓ (re-checked each block)";
-    } else if (web.webvalidate) {
-      ledgerState($("lr-web"), "bad");
-      $("lr-web-val").innerHTML = webLink(web.url || "") + " · " +
-        (web.reason || "invalid");
+
+    var wv = $("lr-web-val");
+    wv.innerHTML = "";
+    if (web.webvalidate) {
+      ledgerState($("lr-web"), web.valid ? "ok" : "bad");
+      wv.appendChild(webLinkEl(web.url || ""));
+      wv.appendChild(document.createTextNode(
+        web.valid ? " · valid ✓ (re-checked each block)"
+                  : " · " + (web.reason || "invalid")));
     } else {
       ledgerState($("lr-web"), "none");
-      $("lr-web-val").innerText = "no web proof declared";
+      wv.innerText = "no web proof declared";
     }
   });
   MDS.cmd("tokens tokenid:" + TOKENID, function (res) {
@@ -446,7 +497,7 @@ function refreshProvenance() {
       if (t.name.external_url && !META.external_url) {
         META.external_url = t.name.external_url;
         $("d-external").classList.remove("hidden");
-        $("d-external").href = META.external_url;
+        $("d-external").href = safeUrl(META.external_url);
         $("d-external").innerText = META.external_url
           .replace(/^https?:\/\//, "").substring(0, 34) + " ↗";
       }
@@ -601,16 +652,25 @@ function renderCards(coins, mineIds) {
     else if (st === "entombed") { badge = "<span class='card-owner owner-other'>&#8224; entombed</span>"; }
     else if (owned) { badge = "<span class='card-owner owner-mine'>◆ mine</span>"; }
     else { badge = "<span class='card-owner owner-other'>held</span>"; }
+    // no chain data in this markup - the image src is assigned as a property
+    // below so a hostile base URL cannot break out of the attribute
     card.innerHTML =
       badge +
-      "<div class='card-frame'><img alt='No. " + n + "' src='" + coinImage(coin, n) + "'" +
-      " style='opacity:0' onload='this.style.opacity=1'" +
-      " onerror=\"this.onerror=null;this.src=placeholderSVG(" + n + ");this.style.opacity=1\"/></div>" +
+      "<div class='card-frame'><img alt='No. " + n + "' style='opacity:0'/></div>" +
       "<div class='card-body'>" +
       "<div class='card-index'>No. " + n + "</div>" +
       "<span class='chip-hash'></span>" +
       (owned ? "<button class='btn btn-gold'>Transfer</button>" : "") +
       "</div>";
+    (function (imgEl, ix) {
+      imgEl.onload = function () { imgEl.style.opacity = 1; };
+      imgEl.onerror = function () {
+        imgEl.onerror = null;
+        imgEl.src = placeholderSVG(ix);
+        imgEl.style.opacity = 1;
+      };
+      imgEl.src = coinImage(coin, ix);
+    })(card.querySelector("img"), n);
 
     var chip = card.querySelector(".chip-hash");
     if (coin) { hashChip(chip, coin.coinid); }
@@ -723,10 +783,10 @@ function fillInspector(idx) {
   }
 
   $("lot-desc").innerText = META.description || "";
-  var ext = META.external_url || "";
+  var ext = safeUrl(META.external_url || "");
   $("lot-external").classList.toggle("hidden", !ext);
   if (ext) {
-    $("lot-external").href = ext;
+    $("lot-external").href = safeUrl(ext);
     $("lot-external").innerText = ext.replace(/^https?:\/\//, "").substring(0, 30) + " ↗";
   }
 
