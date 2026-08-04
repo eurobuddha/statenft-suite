@@ -87,13 +87,15 @@ function iconSrc(icon) {
   return null;
 }
 
-/* Safe value for a CSS url(...) - only srcs we produced (data: image) or an
- * http(s) URL, with quotes/parens/backslashes rejected so nothing can escape
- * the declaration. */
+/* Safe value for a CSS url("...") - either a data: image URI we generated or
+ * an http(s) URL. Only a double quote, backslash or newline can escape a
+ * double-quoted url() token; semicolons, parens and single quotes are legal
+ * inside it and MUST stay allowed (a base64 data URI contains ";base64,",
+ * and our placeholder SVG carries single quotes). */
 function cssUrl(src) {
   if (!src) { return ""; }
   src = "" + src;
-  if (/["'()\\;]/.test(src)) { return ""; }
+  if (/["\\\r\n]/.test(src)) { return ""; }
   if (/^data:image\/(jpeg|png|gif|svg\+xml)[;,]/i.test(src)) { return src; }
   return safeUrl(src);
 }

@@ -533,9 +533,10 @@ function enginePhaseStamp(row, tip, done) {
           var img = (res.rows && res.rows.length) ? res.rows[0].IMAGE : "";
           if (row.MODE === "embed" && !img) {
             // Stamping is irreversible under a locked edition: an item stamped
-            // without its image would be permanently imageless. Leave the coin
-            // blank and surface the problem instead.
-            free.unshift(idx);
+            // without its image would be permanently imageless. Stop this tick
+            // and surface the gap once (free is recomputed from the chain on
+            // the next tick, so nothing is lost by clearing it here).
+            free.length = 0;
             engineSetError(row, "missing image for item #" + idx +
               " - re-supply it to finish this mint", next);
             return;
