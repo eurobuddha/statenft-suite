@@ -2,3 +2,5 @@
 *.log
 nohup.out
 graphify-out/
+__pycache__/
+*.pyc

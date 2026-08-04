@@ -61,6 +61,21 @@ there. Instead:
   the practical ceiling. `mint.py` splits adaptively and keeps coins at the
   creator address so one signature covers both coin and token script.
 
+## Tests
+
+```bash
+./test/run.sh          # syntax, sanitizers, engine, CLI parity
+```
+
+No dependencies and no node connection required. The guards around untrusted
+chain metadata and coin state are asserted in **both** directions: hostile
+input is rejected *and* the values the app itself writes still pass. That
+pairing exists because a release once shipped a sanitizer which blocked every
+attack and also silently blocked every legitimate `data:` image URI, degrading
+all on-chain artwork to placeholders for two versions. The suite is
+mutation-checked - reintroducing that bug, removing the coin-state guard, or
+reverting the CLI to name-only token lookup each make it fail.
+
 ## Layout
 
 ```
