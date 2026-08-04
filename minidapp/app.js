@@ -507,7 +507,8 @@ function refreshProvenance() {
         if (ic) {
           $("d-icon").classList.remove("hidden");
           $("d-icon").src = ic;
-          $("hero-ambient").style.backgroundImage = "url(\"" + ic + "\")";
+          var icc = cssUrl(ic);
+          if (icc) { $("hero-ambient").style.backgroundImage = "url(\"" + icc + "\")"; }
         }
       }
     }

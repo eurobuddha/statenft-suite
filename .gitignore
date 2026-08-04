@@ -1,3 +1,4 @@
 .claude/
 *.log
 nohup.out
+graphify-out/
