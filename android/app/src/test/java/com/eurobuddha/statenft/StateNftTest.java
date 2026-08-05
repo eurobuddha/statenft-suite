@@ -73,6 +73,19 @@ public class StateNftTest {
                 StateNft.script(PK, "embed"));
     }
 
+    @Test public void manualOpenMetadataFallsBackToTokenTotal() throws Exception {
+        JSONObject token = new JSONObject()
+                .put("name", "Legacy StateNFT")
+                .put("total", "12")
+                .put("url", "https://example.com/icon.png");
+
+        StateNft.Meta meta = StateNft.parseMeta("0x01", token);
+
+        assertEquals("Legacy StateNFT", meta.name);
+        assertEquals(12, meta.size);
+        assertEquals("https://example.com/icon.png", meta.icon);
+    }
+
     @Test public void localMintRowRoundTripsMetadata() throws Exception {
         StateNft.Meta m = new StateNft.Meta();
         m.localId = 7;

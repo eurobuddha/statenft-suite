@@ -65,7 +65,7 @@ public final class StateNft {
             m.name = first(src.optString("name", ""), root.optString("name", ""), "Collection");
             m.description = first(src.optString("description", ""), root.optString("description", ""));
             m.mode = first(src.optString("mode", ""), root.optString("mode", ""), src.optString("base", "").isEmpty() ? "embed" : "url");
-            m.size = src.optInt("size", root.optInt("size", 0));
+            m.size = firstInt(src.opt("size"), root.opt("size"), root.opt("total"));
             m.base = first(src.optString("base", ""), root.optString("base", ""));
             m.ext = first(src.optString("ext", ""), root.optString("ext", ""), ".png");
             m.icon = first(src.optString("url", ""), root.optString("url", ""), src.optString("icon", ""), root.optString("icon", ""));
@@ -239,6 +239,18 @@ public final class StateNft {
     private static String first(String... vals) {
         for (String v : vals) if (v != null && !v.isEmpty()) return v;
         return "";
+    }
+
+    private static int firstInt(Object... vals) {
+        for (Object v : vals) {
+            if (v == null) continue;
+            if (v instanceof Number) return ((Number) v).intValue();
+            try {
+                String s = String.valueOf(v).trim();
+                if (!s.isEmpty()) return Integer.parseInt(s);
+            } catch (Exception ignored) {}
+        }
+        return 0;
     }
 
     private static void put(JSONObject o, String k, Object v) {

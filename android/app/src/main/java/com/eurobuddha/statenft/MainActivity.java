@@ -1,6 +1,7 @@
 package com.eurobuddha.statenft;
 
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.net.Uri;
 import android.graphics.Typeface;
@@ -47,13 +48,14 @@ public class MainActivity extends AppCompatActivity {
     private String createName = "";
     private String createDesc = "";
     private String createSize = "20";
-    private String createBase = "https://assets.example.com/collection/";
+    private String createBase = "";
     private String createExt = ".png";
     private String createIcon = "";
     private String createExternal = "";
     private String createWeb = "";
     private String[] createImages = new String[0];
     private int pendingImageIndex = -1;
+    private boolean pendingBatchImages = false;
 
     private final Runnable mintLoop = new Runnable() {
         @Override public void run() {
@@ -94,16 +96,23 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == 7001 && resultCode == RESULT_OK && data != null && data.getData() != null && pendingImageIndex >= 0) {
-            int idx = pendingImageIndex;
-            Uri uri = data.getData();
+        if (requestCode == 7001 && resultCode == RESULT_OK && data != null) {
+            ArrayList<Uri> uris = selectedImageUris(data);
+            if (uris.isEmpty()) return;
+            int start = pendingBatchImages ? firstEmptyImageSlot() : pendingImageIndex;
+            boolean batch = pendingBatchImages;
+            pendingImageIndex = -1;
+            pendingBatchImages = false;
             new Thread(() -> {
-                String b64 = "";
-                try { b64 = ImageTools.compressUri(this, uri, 8000); } catch (Exception ignored) {}
-                final String out = b64;
+                ArrayList<String> out = new ArrayList<>();
+                for (Uri uri : uris) {
+                    try { out.add(ImageTools.compressUri(this, uri, 8000)); }
+                    catch (Exception ignored) { out.add(""); }
+                }
                 runOnUiThread(() -> {
-                    if (idx >= 0 && idx < createImages.length) createImages[idx] = out;
-                    toast(out.isEmpty() ? "Could not process image" : "Image added for item #" + (idx + 1));
+                    int added = batch ? applyPickedImages(start, out) : applyReplacementImage(start, out);
+                    toast(added == 0 ? "Could not process selected image"
+                            : (batch ? added + " images added" : "Image added for item #" + (start + 1)));
                     renderCreate();
                 });
             }).start();
@@ -253,18 +262,23 @@ public class MainActivity extends AppCompatActivity {
 
         EditText name = addInputField(body, "Name", "Architect Lines", "Required. 1-40 characters.");
         EditText desc = addInputField(body, "Description", "Monochrome architectural studies.", "Optional. 0-200 characters.");
-        EditText size = addInputField(body, "Size (items)", "512", "1-10,000 items per collection.");
+        EditText size = addInputField(body, "Size (items)", "20", "2-20 items per collection.");
         name.setText(createName);
         desc.setText(createDesc);
         size.setText(createSize);
 
+        final EditText[] baseField = new EditText[1];
+        final EditText[] extField = new EditText[1];
+        final EditText[] iconField = new EditText[1];
+        final EditText[] externalField = new EditText[1];
+        final EditText[] webField = new EditText[1];
         TextView modeUrl = button("URL", "url".equals(createMode), v -> {
-            saveCreateDraft(name, desc, size, null, null, null, null, null);
+            saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
             createMode = "url";
             renderCreate();
         });
         TextView modeEmbed = button("Embed", "embed".equals(createMode), v -> {
-            saveCreateDraft(name, desc, size, null, null, null, null, null);
+            saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
             createMode = "embed";
             renderCreate();
         });
@@ -274,37 +288,43 @@ public class MainActivity extends AppCompatActivity {
 
         body.addView(label("Mode"), lp(-1, -2, 20, 10, 20, 6));
         body.addView(mode, lp(-1, -2, 20, 0, 20, 10));
-        EditText base = addInputField(body, "Base URL", "https://assets.example.com/collection/", "Required for URL mode.");
-        EditText ext = addInputField(body, "Extension", ".png", "Example: .png, .jpg, .webp.");
-        EditText icon = addInputField(body, "Icon URL (optional)", "https://assets.example.com/icon.png", "Shown in wallets and collection list.");
-        EditText external = addInputField(body, "External URL (optional)", "https://assets.example.com/collection", "Opens from collection detail.");
-        EditText web = addInputField(body, "Web Validate URL (optional)", "https://assets.example.com/validate", "Should return 200 OK for a valid tokenid.");
-        base.setText(createBase);
-        ext.setText(createExt);
-        icon.setText(createIcon);
-        external.setText(createExternal);
-        web.setText(createWeb);
+        if ("url".equals(createMode)) {
+            baseField[0] = addInputField(body, "Base URL", "https://.../collection/", "Required for URL mode.");
+            extField[0] = addInputField(body, "Extension", ".png", "Example: .png, .jpg, .webp.");
+            baseField[0].setText(createBase);
+            extField[0].setText(createExt);
+        }
+        iconField[0] = addInputField(body, "Icon URL (optional)", "https://.../icon.png", "Shown in wallets and collection list.");
+        externalField[0] = addInputField(body, "External URL (optional)", "https://.../collection", "Opens from collection detail.");
+        webField[0] = addInputField(body, "Web Validate URL (optional)", "https://.../validate", "Should return 200 OK for a valid tokenid.");
+        iconField[0].setText(createIcon);
+        externalField[0].setText(createExternal);
+        webField[0].setText(createWeb);
         if ("embed".equals(createMode)) {
             int n = Math.max(2, Math.min(20, parseInt(size.getText().toString(), 20)));
             ensureCreateImages(n);
             body.addView(button("Update Image Slots", false, v -> {
-                saveCreateDraft(name, desc, size, base, ext, icon, external, web);
+                saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
                 ensureCreateImages(Math.max(2, Math.min(20, parseInt(size.getText().toString(), 20))));
                 renderCreate();
             }), lp(-1, Design.dp(this, 48), 20, 0, 20, 10));
             body.addView(sectionLabel("Embed Images"), lp(-1, -2, 20, 0, 20, 8));
+            body.addView(button("Choose Images", true, v -> {
+                saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
+                pickImages();
+            }), lp(-1, Design.dp(this, 52), 20, 0, 20, 8));
             for (int i = 0; i < createImages.length; i++) {
                 final int idx = i;
                 String label = createImages[i] == null || createImages[i].isEmpty()
-                        ? "Choose image for item #" + (i + 1)
-                        : "Item #" + (i + 1) + " image ready";
+                        ? "Empty slot #" + (i + 1)
+                        : "Replace item #" + (i + 1);
                 body.addView(button(label, false, v -> {
-                    saveCreateDraft(name, desc, size, base, ext, icon, external, web);
+                    saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
                     pickImage(idx);
                 }), lp(-1, Design.dp(this, 46), 20, 0, 20, 6));
             }
         }
-        body.addView(button("Create Collection", true, v -> createCollection(name, desc, size, base, ext, icon, external, web)), lp(-1, Design.dp(this, 56), 20, 10, 20, 10));
+        body.addView(button("Create Collection", true, v -> createCollection(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0])), lp(-1, Design.dp(this, 56), 20, 10, 20, 10));
         body.addView(note("Minting runs as a resumable create-split-stamp job while the app is open."), lp(-1, -2, 20, 0, 20, 16));
 
         root.addView(bottomNav(1));
@@ -317,8 +337,8 @@ public class MainActivity extends AppCompatActivity {
         String n = name.getText().toString().trim();
         String d = desc.getText().toString().trim();
         String s = size.getText().toString().trim();
-        String b = base.getText().toString().trim();
-        String x = ext.getText().toString().trim();
+        String b = base == null ? "" : base.getText().toString().trim();
+        String x = ext == null ? ".png" : ext.getText().toString().trim();
         String ic = icon.getText().toString().trim();
         String ex = external.getText().toString().trim();
         String w = web.getText().toString().trim();
@@ -384,13 +404,20 @@ public class MainActivity extends AppCompatActivity {
         toast("Inspecting " + Util.shorten(tokenid));
         node.cmd("tokens tokenid:" + tokenid, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
+                if (!json.optBoolean("status", true)) {
+                    toast("token not found on this node");
+                    return;
+                }
                 JSONObject t = json.optJSONObject("response");
                 if (t == null) { toast("token not found"); return; }
                 String pk = StateNft.creatorPk(t.optString("script", ""));
-                if (pk.isEmpty()) { toast("not a StateNFT collection"); return; }
                 StateNft.Meta m = StateNft.parseMeta(tokenid, t);
                 m.creatorPk = pk;
+                m.phase = "DONE";
+                if (m.localId == 0) m.localId = LocalStore.nextId(MainActivity.this);
                 countOwned(m, () -> {
+                    LocalStore.upsert(MainActivity.this, MintEngine.rowFromMeta(m, new JSONArray()));
+                    loadLocalCollections();
                     boolean known = false;
                     for (StateNft.Meta existing : collections) if (existing.tokenid.equals(m.tokenid)) known = true;
                     if (!known) collections.add(m);
@@ -1053,7 +1080,7 @@ public class MainActivity extends AppCompatActivity {
         createName = "";
         createDesc = "";
         createSize = "20";
-        createBase = "https://assets.example.com/collection/";
+        createBase = "";
         createExt = ".png";
         createIcon = "";
         createExternal = "";
@@ -1061,8 +1088,61 @@ public class MainActivity extends AppCompatActivity {
         createImages = new String[0];
     }
 
+    private ArrayList<Uri> selectedImageUris(Intent data) {
+        ArrayList<Uri> uris = new ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+                if (uri != null) uris.add(uri);
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        return uris;
+    }
+
+    private int firstEmptyImageSlot() {
+        for (int i = 0; i < createImages.length; i++) {
+            if (createImages[i] == null || createImages[i].isEmpty()) return i;
+        }
+        return 0;
+    }
+
+    private int applyPickedImages(int start, ArrayList<String> images) {
+        if (start < 0 || start >= createImages.length) start = firstEmptyImageSlot();
+        int slot = start;
+        int added = 0;
+        for (String b64 : images) {
+            if (b64 == null || b64.isEmpty()) continue;
+            while (slot < createImages.length && createImages[slot] != null && !createImages[slot].isEmpty()) slot++;
+            if (slot >= createImages.length) break;
+            createImages[slot++] = b64;
+            added++;
+        }
+        return added;
+    }
+
+    private int applyReplacementImage(int slot, ArrayList<String> images) {
+        if (slot < 0 || slot >= createImages.length || images.isEmpty()) return 0;
+        String b64 = images.get(0);
+        if (b64 == null || b64.isEmpty()) return 0;
+        createImages[slot] = b64;
+        return 1;
+    }
+
+    private void pickImages() {
+        pendingImageIndex = -1;
+        pendingBatchImages = true;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("image/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(Intent.createChooser(i, "Choose StateNFT images"), 7001);
+    }
+
     private void pickImage(int idx) {
         pendingImageIndex = idx;
+        pendingBatchImages = false;
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType("image/*");
         startActivityForResult(Intent.createChooser(i, "Choose StateNFT image"), 7001);

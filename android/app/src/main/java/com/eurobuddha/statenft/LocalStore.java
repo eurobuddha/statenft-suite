@@ -32,10 +32,12 @@ public final class LocalStore {
     public static void upsert(Context c, JSONObject row) {
         JSONArray arr = load(c);
         long id = row.optLong("id", 0);
+        String tokenid = row.optString("tokenid", "");
         boolean done = false;
         for (int i = 0; i < arr.length(); i++) {
             JSONObject cur = arr.optJSONObject(i);
-            if (cur != null && cur.optLong("id", -1) == id) {
+            if (cur != null && (cur.optLong("id", -1) == id
+                    || (!tokenid.isEmpty() && tokenid.equals(cur.optString("tokenid", ""))))) {
                 try { arr.put(i, row); } catch (Exception ignored) {}
                 done = true;
                 break;
