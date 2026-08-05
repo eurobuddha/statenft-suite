@@ -40,7 +40,7 @@ public class StateNftTest {
                 .put("state", new JSONArray()
                         .put(new JSONObject().put("port", 0).put("data", "3"))
                         .put(new JSONObject().put("port", 1).put("data", "[QUJDRA==]")));
-        assertEquals("data:image/png;base64,QUJDRA==", StateNft.imageUrl(meta, 3, coin));
+        assertEquals("data:image/jpeg;base64,QUJDRA==", StateNft.imageUrl(meta, 3, coin));
     }
 
     @Test public void transferReplaysEveryStatePort() throws Exception {
@@ -84,6 +84,25 @@ public class StateNftTest {
         assertEquals("Legacy StateNFT", meta.name);
         assertEquals(12, meta.size);
         assertEquals("https://example.com/icon.png", meta.icon);
+    }
+
+    @Test public void manualOpenMetadataUnwrapsTokenEnvelope() throws Exception {
+        JSONObject token = new JSONObject()
+                .put("token", new JSONObject()
+                        .put("name", new JSONObject()
+                                .put("name", "Wrapped StateNFT")
+                                .put("mode", "embed")
+                                .put("size", 17)
+                                .put("url", "<artimage>AAAA</artimage>"))
+                        .put("totalamount", "17"))
+                .put("script", "RETURN TRUE");
+
+        StateNft.Meta meta = StateNft.parseMeta("0x01", token);
+
+        assertEquals("Wrapped StateNFT", meta.name);
+        assertEquals("embed", meta.mode);
+        assertEquals(17, meta.size);
+        assertEquals("<artimage>AAAA</artimage>", meta.icon);
     }
 
     @Test public void localMintRowRoundTripsMetadata() throws Exception {

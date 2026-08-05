@@ -35,7 +35,7 @@ public final class MintEngine {
         JSONObject row = rows.optJSONObject(i);
         if (row == null) { tickRow(ctx, node, rows, i + 1, tip, done); return; }
         String phase = row.optString("phase", "DONE");
-        if ("DONE".equals(phase) || "BURIED".equals(phase) || "NEEDIMAGES".equals(phase)) {
+        if ("DONE".equals(phase) || "BURIED".equals(phase)) {
             tickRow(ctx, node, rows, i + 1, tip, done);
             return;
         }
@@ -43,6 +43,7 @@ public final class MintEngine {
         else if ("MOVE".equals(phase)) phaseMove(ctx, node, row, tip, done);
         else if ("SPLIT".equals(phase)) phaseSplit(ctx, node, row, tip, done);
         else if ("STAMP".equals(phase)) phaseStamp(ctx, node, row, tip, done);
+        else if ("NEEDIMAGES".equals(phase)) phaseNeedImages(ctx, node, row, done);
         else if ("BURY".equals(phase)) done.done("Bury is handled from the Bury screen");
         else tickRow(ctx, node, rows, i + 1, tip, done);
     }
@@ -246,6 +247,26 @@ public final class MintEngine {
         }, e -> setError(ctx, row, e, done));
     }
 
+    private static void phaseNeedImages(Context ctx, NodeApi node, JSONObject row, Done done) {
+        tokenCoins(node, row.optString("tokenid"), coins -> {
+            HashSet<String> used = new HashSet<>();
+            for (int i = 0; i < coins.length(); i++) {
+                JSONObject c = coins.optJSONObject(i);
+                if (c == null) continue;
+                String idx = StateNft.stamped(c);
+                if (idx != null && idx.matches("^[0-9]+$")) used.add(idx);
+            }
+            if (used.size() >= row.optInt("size")) {
+                setPhase(ctx, row, "DONE", done);
+            } else if (missingLocalImages(row) == 0) {
+                setPhase(ctx, row, "MOVE", done);
+            } else {
+                LocalStore.upsert(ctx, row);
+                done.done(missingLocalImages(row) + " embedded images still missing");
+            }
+        }, e -> done.done("Waiting for missing embedded images"));
+    }
+
     private static void postTxn(NodeApi node, String id, List<String> steps, Runnable ok, java.util.function.Consumer<String> fail) {
         cmd(node, "txndelete id:" + id, new Cb() {
             @Override public void ok(JSONObject ignored) { build(); }
@@ -422,6 +443,16 @@ public final class MintEngine {
     private static int firstFree(int size, HashSet<String> used) {
         for (int i = 1; i <= size; i++) if (!used.contains(String.valueOf(i))) return i;
         return size;
+    }
+
+    private static int missingLocalImages(JSONObject row) {
+        if (!"embed".equals(row.optString("mode"))) return 0;
+        int size = row.optInt("size", 0);
+        int missing = 0;
+        for (int idx = 1; idx <= size; idx++) {
+            if (itemImage(row, idx).isEmpty()) missing++;
+        }
+        return missing;
     }
 
     private static int parseInt(String s) {

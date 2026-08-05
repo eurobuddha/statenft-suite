@@ -32,6 +32,9 @@ import java.util.HashSet;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int PICK_CREATE = 1;
+    private static final int PICK_RECOVERY = 2;
+
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayList<StateNft.Meta> collections = new ArrayList<>();
     private final ArrayList<StateNft.Meta> scanFound = new ArrayList<>();
@@ -42,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView nodeChip;
     private TextView inlineStatus;
     private StateNft.Meta openMeta;
+    private Runnable currentBackAction;
     private JSONArray openOwned = new JSONArray();
     private JSONArray openAll = new JSONArray();
     private String createMode = "url";
@@ -56,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private String[] createImages = new String[0];
     private int pendingImageIndex = -1;
     private boolean pendingBatchImages = false;
+    private int pendingPickContext = PICK_CREATE;
+    private long pendingRecoveryId = 0;
     private boolean jumpCreateImages = false;
 
     private final Runnable mintLoop = new Runnable() {
@@ -101,6 +107,14 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
     }
 
+    @Override public void onBackPressed() {
+        if (currentBackAction != null) {
+            currentBackAction.run();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == 7001 && resultCode == RESULT_OK && data != null) {
@@ -117,11 +131,26 @@ public class MainActivity extends AppCompatActivity {
                     catch (Exception ignored) { out.add(""); }
                 }
                 runOnUiThread(() -> {
-                    int added = batch ? applyPickedImages(start, out) : applyReplacementImage(start, out);
-                    toast(added == 0 ? "Could not process selected image"
-                            : (batch ? added + " images added" : "Image added for item #" + (start + 1)));
-                    jumpCreateImages = true;
-                    renderCreate();
+                    if (pendingPickContext == PICK_RECOVERY) {
+                        long id = pendingRecoveryId;
+                        pendingPickContext = PICK_CREATE;
+                        pendingRecoveryId = 0;
+                        int added = applyRecoveryImages(id, start, batch, out);
+                        toast(added == 0 ? "Could not process selected image"
+                                : (batch ? added + " recovery images added" : "Recovery image added"));
+                        loadLocalCollections();
+                        openMeta = findCollectionByLocalId(id, openMeta);
+                        if (openMeta != null && !"NEEDIMAGES".equals(openMeta.phase)) {
+                            MintEngine.resumeNow(this, node, msg -> toast(msg));
+                        }
+                        openCollection(openMeta);
+                    } else {
+                        int added = batch ? applyPickedImages(start, out) : applyReplacementImage(start, out);
+                        toast(added == 0 ? "Could not process selected image"
+                                : (batch ? added + " images added" : "Image added for item #" + (start + 1)));
+                        jumpCreateImages = true;
+                        renderCreate();
+                    }
                 });
             }).start();
         }
@@ -159,6 +188,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void renderCollections() {
+        currentBackAction = null;
         openMeta = null;
         loadLocalCollections();
         LinearLayout root = shell();
@@ -195,6 +225,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void renderScan() {
+        currentBackAction = this::renderCollections;
         scanFound.clear();
         LinearLayout root = shell();
         root.addView(appBar("Scan Wallet", v -> renderCollections(), false));
@@ -263,6 +294,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void renderCreate() {
+        currentBackAction = this::renderCollections;
         LinearLayout root = shell();
         root.addView(appBar("Create Collection", v -> renderCollections(), false));
         body = vertical();
@@ -321,6 +353,7 @@ public class MainActivity extends AppCompatActivity {
                 saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
                 pickImages();
             }), lp(-1, Design.dp(this, 52), 20, 0, 20, 8));
+            body.addView(note("Stamped Preview"), lp(-1, -2, 20, 0, 20, 6));
             body.addView(imageSlotGrid(), lp(-1, -2, 20, 0, 20, 10));
             for (int i = 0; i < createImages.length; i++) {
                 final int idx = i;
@@ -474,6 +507,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void openCollection(StateNft.Meta m) {
+        currentBackAction = this::renderCollections;
         openMeta = m;
         LinearLayout root = shell();
         root.addView(appBar(m.name, v -> renderCollections(), false));
@@ -492,18 +526,24 @@ public class MainActivity extends AppCompatActivity {
                 openOwned = json.optJSONArray("response");
                 if (openOwned == null) openOwned = new JSONArray();
                 m.owned = openOwned.length();
+                android.util.Log.d("StateNFT", "detail relevant coins " + m.owned + " token " + Util.shorten(m.tokenid)
+                        + " stamped " + distinctStamped(openOwned));
                 node.cmd("coins tokenid:" + m.tokenid, new NodeApi.Cb() {
                     @Override public void onResult(JSONObject allJson) {
                         openAll = allJson.optJSONArray("response");
                         if (openAll == null) openAll = openOwned;
                         m.totalSeen = openAll.length();
                         m.minted = distinctStamped(openAll);
+                        android.util.Log.d("StateNFT", "detail all coins " + m.totalSeen + " token " + Util.shorten(m.tokenid)
+                                + " stamped " + m.minted + " raw=" + allJson.toString().substring(0, Math.min(700, allJson.toString().length())));
+                        if (m.size <= 0) m.size = Math.max(m.minted, Math.max(m.totalSeen, m.owned));
                         renderDetail();
                     }
                     @Override public void onError(String message) {
                         openAll = openOwned;
                         m.totalSeen = openOwned.length();
                         m.minted = distinctStamped(openOwned);
+                        if (m.size <= 0) m.size = Math.max(m.minted, Math.max(m.totalSeen, m.owned));
                         renderDetail();
                     }
                 });
@@ -518,11 +558,13 @@ public class MainActivity extends AppCompatActivity {
         body.removeAllViews();
         List<StateNft.Item> items = StateNft.items(m, openOwned, openAll);
         if (m.created && (m.tokenid == null || m.tokenid.isEmpty())) items = localItemsForMeta(m);
+        else if (m.created) items = mergeLocalPreviews(m, items);
         StateNft.Item firstOwned = null;
         for (StateNft.Item item : items) if (item.owned && firstOwned == null) firstOwned = item;
         String heroUrl = !items.isEmpty() ? items.get(0).imageUrl : IconResolver.resolve(m.icon);
 
         if (activeMint(m)) body.addView(mintStatusPanel(m, items), lp(-1, -2, 20, 8, 20, 12));
+        if ("NEEDIMAGES".equals(m.phase)) body.addView(recoveryPanel(m), lp(-1, -2, 20, 0, 20, 12));
 
         ImageView hero = new ImageView(this);
         hero.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -562,6 +604,13 @@ public class MainActivity extends AppCompatActivity {
         }
 
         body.addView(sectionLabel("Items - tap an owned item to transfer"), lp(-1, -2, 20, 0, 20, 8));
+        if (items.isEmpty()) {
+            LinearLayout empty = panel(14);
+            empty.addView(text("No Items Visible", 17, Design.INK(), Design.sansBold()));
+            empty.addView(note("The token opened, but this node did not return item coins for it yet."), lp(-1, -2, 0, 8, 0, 0));
+            body.addView(empty, lp(-1, -2, 20, 0, 20, 12));
+            return;
+        }
         int max = Math.min(items.size(), 60);
         for (int i = 0; i < max; i += 2) {
             LinearLayout row = horizontal(8, Gravity.TOP);
@@ -597,6 +646,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void transferScreen(StateNft.Item it) {
         if (it.coin == null || openMeta == null) return;
+        currentBackAction = () -> openCollection(openMeta);
         LinearLayout root = shell();
         root.addView(appBar("Item #" + String.format("%04d", it.index), v -> openCollection(openMeta), false));
         body = vertical();
@@ -651,6 +701,7 @@ public class MainActivity extends AppCompatActivity {
     private void renderBury() {
         StateNft.Meta m = openMeta;
         if (m == null) return;
+        currentBackAction = () -> openCollection(m);
         LinearLayout root = shell();
         root.addView(appBar("Bury Collection", v -> openCollection(m), false));
         body = vertical();
@@ -734,6 +785,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void renderSettings() {
+        currentBackAction = this::renderCollections;
         LinearLayout root = shell();
         root.addView(appBar("Settings", null, false));
         body = vertical();
@@ -862,6 +914,32 @@ public class MainActivity extends AppCompatActivity {
         return panel;
     }
 
+    private LinearLayout recoveryPanel(StateNft.Meta m) {
+        LinearLayout panel = panel(14);
+        panel.addView(text("Missing Embedded Images", 18, Design.INK(), Design.sansBold()));
+        panel.addView(note("The previews below are the bytes that will be stamped."), lp(-1, -2, 0, 6, 0, 10));
+        panel.addView(button("Choose Missing Images", true, v -> pickRecoveryImages(m)), lp(-1, Design.dp(this, 50), 0, 0, 0, 10));
+        panel.addView(recoveryImageGrid(m), lp(-1, -2, 0, 0, 0, 8));
+        int missing = missingLocalImages(m);
+        TextView state = note(missing == 0 ? "Ready to resume minting." : missing + " images still missing.");
+        panel.addView(state);
+        if (missing == 0) {
+            panel.addView(button("Resume Stamping", true, v -> {
+                JSONObject row = LocalStore.findById(this, m.localId);
+                if (row != null) {
+                    put(row, "phase", "MOVE");
+                    put(row, "error", "");
+                    LocalStore.upsert(this, row);
+                    MintEngine.resumeNow(this, node, msg -> toast(msg));
+                    loadLocalCollections();
+                    openMeta = findCollectionByLocalId(m.localId, m);
+                    openCollection(openMeta);
+                }
+            }), lp(-1, Design.dp(this, 50), 0, 10, 0, 0));
+        }
+        return panel;
+    }
+
     private LinearLayout phaseRail(StateNft.Meta m) {
         String[] phases = {"CREATE", "MOVE", "SPLIT", "STAMP", "DONE"};
         String phase = m == null || m.phase == null ? "" : m.phase;
@@ -891,7 +969,7 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < count; i++) {
             StateNft.Item it = items.get(i);
             LinearLayout cell = vertical();
-            cell.setBackground(Design.stroke(it.coin != null ? Design.PAPER() : 0xFFF7F4EE, it.coin != null ? Design.ACCENT() : Design.RAIL()));
+            cell.setBackground(Design.stroke(it.coin != null ? Design.PAPER() : 0xFFF1F1EF, it.coin != null ? Design.ACCENT() : Design.RAIL()));
             ImageView iv = new ImageView(this);
             iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             iv.setImageBitmap(Identicon.forToken("mint" + i, 80));
@@ -982,7 +1060,11 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout appBar(String title, View.OnClickListener back, boolean menu) {
         LinearLayout bar = horizontal(12, Gravity.CENTER_VERTICAL);
         bar.setPadding(Design.dp(this, 20), Design.dp(this, 12), Design.dp(this, 20), Design.dp(this, 12));
-        if (back != null) bar.addView(iconButton("<", back), new LinearLayout.LayoutParams(Design.dp(this, 40), Design.dp(this, 40)));
+        if (back != null) {
+            currentBackAction = () -> back.onClick(bar);
+            TextView backButton = iconButton("< Back", back);
+            bar.addView(backButton, new LinearLayout.LayoutParams(Design.dp(this, 78), Design.dp(this, 44)));
+        }
         else if (menu) bar.addView(iconButton("Menu", v -> {}), new LinearLayout.LayoutParams(Design.dp(this, 52), Design.dp(this, 40)));
         TextView tv = text(title, 20, Design.INK(), Design.sansBold());
         bar.addView(tv, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1004,7 +1086,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView navItem(String label, boolean active, View.OnClickListener click) {
         TextView t = text(label, 11, active ? Design.INK() : Design.DIM(), active ? Design.sansBold() : Design.sans());
         t.setGravity(Gravity.CENTER);
-        t.setBackground(Design.stroke(active ? 0x12E9562B : 0x00FFFFFF, active ? Design.ACCENT() : Design.RAIL()));
+        t.setBackground(Design.stroke(active ? 0x11111111 : 0x00FFFFFF, active ? Design.ACCENT() : Design.RAIL()));
         t.setOnClickListener(click);
         t.setClickable(true);
         return t;
@@ -1038,10 +1120,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private TextView iconButton(String label, View.OnClickListener click) {
-        TextView b = text(label, 24, Design.INK(), Design.sans());
+        TextView b = text(label, label.length() > 2 ? 13 : 24, Design.INK(), Design.sansBold());
         b.setGravity(Gravity.CENTER);
+        b.setBackground(Design.ripple(Design.stroke(0x00FFFFFF, Design.RAIL())));
         b.setClickable(true);
         b.setOnClickListener(click);
+        Design.pressable(b);
         return b;
     }
 
@@ -1216,11 +1300,126 @@ public class MainActivity extends AppCompatActivity {
             it.index = j.optInt("idx", i + 1);
             it.owned = false;
             it.imageUrl = "embed".equals(m.mode)
-                    ? "data:image/png;base64," + j.optString("image")
+                    ? "data:image/jpeg;base64," + j.optString("image")
                     : j.optString("image");
             out.add(it);
         }
         return out;
+    }
+
+    private List<StateNft.Item> mergeLocalPreviews(StateNft.Meta m, List<StateNft.Item> chainItems) {
+        List<StateNft.Item> local = localItemsForMeta(m);
+        if (local.isEmpty()) return chainItems;
+        java.util.HashMap<Integer, String> preview = new java.util.HashMap<>();
+        for (StateNft.Item it : local) preview.put(it.index, it.imageUrl);
+        ArrayList<StateNft.Item> out = new ArrayList<>();
+        for (StateNft.Item it : chainItems) {
+            String localUrl = preview.get(it.index);
+            if (localUrl != null && !localUrl.isEmpty()
+                    && (it.coin == null || it.imageUrl == null || it.imageUrl.isEmpty()
+                    || it.imageUrl.equals(IconResolver.resolve(m.icon)))) {
+                it.imageUrl = localUrl;
+            }
+            out.add(it);
+        }
+        return out;
+    }
+
+    private String localImage(long localId, int idx) {
+        JSONObject row = LocalStore.findById(this, localId);
+        if (row == null) return "";
+        JSONArray items = MintEngine.localItems(row);
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it != null && it.optInt("idx") == idx) return it.optString("image", "");
+        }
+        return "";
+    }
+
+    private int missingLocalImages(StateNft.Meta m) {
+        if (m == null || !"embed".equals(m.mode)) return 0;
+        int missing = 0;
+        for (int i = 1; i <= m.size; i++) {
+            String img = localImage(m.localId, i);
+            if (img == null || img.isEmpty()) missing++;
+        }
+        return missing;
+    }
+
+    private int applyRecoveryImages(long localId, int startZero, boolean batch, ArrayList<String> images) {
+        JSONObject row = LocalStore.findById(this, localId);
+        if (row == null) return 0;
+        int size = row.optInt("size", 0);
+        int added = 0;
+        if (batch) {
+            int slot = Math.max(1, startZero + 1);
+            for (String b64 : images) {
+                if (b64 == null || b64.isEmpty()) continue;
+                while (slot <= size && !localImageInRow(row, slot).isEmpty()) slot++;
+                if (slot > size) break;
+                setLocalImage(row, slot, b64);
+                added++;
+                slot++;
+            }
+        } else if (!images.isEmpty()) {
+            String b64 = images.get(0);
+            int idx = Math.max(1, startZero + 1);
+            if (idx <= size && b64 != null && !b64.isEmpty()) {
+                setLocalImage(row, idx, b64);
+                added = 1;
+            }
+        }
+        put(row, "phase", missingLocalImagesInRow(row) == 0 ? "MOVE" : "NEEDIMAGES");
+        put(row, "error", missingLocalImagesInRow(row) == 0 ? "" : missingLocalImagesInRow(row) + " images still missing");
+        LocalStore.upsert(this, row);
+        return added;
+    }
+
+    private String localImageInRow(JSONObject row, int idx) {
+        JSONArray items = MintEngine.localItems(row);
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it != null && it.optInt("idx") == idx) return it.optString("image", "");
+        }
+        return "";
+    }
+
+    private int missingLocalImagesInRow(JSONObject row) {
+        int size = row.optInt("size", 0);
+        int missing = 0;
+        for (int i = 1; i <= size; i++) if (localImageInRow(row, i).isEmpty()) missing++;
+        return missing;
+    }
+
+    private void setLocalImage(JSONObject row, int idx, String b64) {
+        JSONArray items = MintEngine.localItems(row);
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it != null && it.optInt("idx") == idx) {
+                put(it, "image", b64);
+                put(row, "items", items);
+                return;
+            }
+        }
+        JSONObject it = new JSONObject();
+        put(it, "idx", idx);
+        put(it, "image", b64);
+        items.put(it);
+        put(row, "items", items);
+    }
+
+    private void rotateRecoveryImage(long localId, int idx) {
+        JSONObject row = LocalStore.findById(this, localId);
+        if (row == null) return;
+        String img = localImageInRow(row, idx);
+        if (img.isEmpty()) return;
+        String rotated = ImageTools.rotateBase64(img, 90, 8000);
+        if (rotated.isEmpty()) { toast("Could not rotate image"); return; }
+        setLocalImage(row, idx, rotated);
+        LocalStore.upsert(this, row);
+        loadLocalCollections();
+        openMeta = findCollectionByLocalId(localId, openMeta);
+        openCollection(openMeta);
     }
 
     private void ensureCreateImages(int count) {
@@ -1277,15 +1476,68 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout cell = vertical();
         cell.setPadding(Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4));
         boolean ready = idx < createImages.length && createImages[idx] != null && !createImages[idx].isEmpty();
-        cell.setBackground(Design.stroke(ready ? Design.PAPER() : 0xFFF7F4EE, ready ? Design.INK() : Design.RAIL()));
+        cell.setBackground(Design.stroke(ready ? Design.PAPER() : 0xFFF1F1EF, ready ? Design.INK() : Design.RAIL()));
         cell.setClickable(true);
-        cell.setOnClickListener(v -> pickImage(idx));
+        cell.setOnClickListener(v -> {
+            if (idx < createImages.length && createImages[idx] != null && !createImages[idx].isEmpty()) rotateCreateImage(idx);
+            else pickImage(idx);
+        });
         ImageView img = new ImageView(this);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         img.setImageBitmap(Identicon.forToken("slot" + idx, 160));
         if (ready) ImageLoader.loadOver(this, "data:image/jpeg;base64," + createImages[idx], img);
         cell.addView(img, new LinearLayout.LayoutParams(-1, 0, 1));
-        TextView label = text("#" + (idx + 1) + (ready ? " ready" : " empty"), 10, ready ? Design.INK() : Design.DIM(), Design.monoBold());
+        TextView label = text("#" + (idx + 1) + (ready ? " rotate" : " add"), 10, ready ? Design.INK() : Design.DIM(), Design.monoBold());
+        label.setGravity(Gravity.CENTER);
+        cell.addView(label, new LinearLayout.LayoutParams(-1, Design.dp(this, 22)));
+        return cell;
+    }
+
+    private void rotateCreateImage(int idx) {
+        if (idx < 0 || idx >= createImages.length || createImages[idx] == null || createImages[idx].isEmpty()) return;
+        String rotated = ImageTools.rotateBase64(createImages[idx], 90, 8000);
+        if (rotated.isEmpty()) { toast("Could not rotate image"); return; }
+        createImages[idx] = rotated;
+        jumpCreateImages = true;
+        renderCreate();
+    }
+
+    private LinearLayout recoveryImageGrid(StateNft.Meta m) {
+        LinearLayout grid = vertical();
+        int cols = 4;
+        for (int i = 1; i <= Math.max(0, m.size); i += cols) {
+            LinearLayout row = horizontal(8, Gravity.CENTER);
+            for (int c = 0; c < cols; c++) {
+                int idx = i + c;
+                if (idx > m.size) {
+                    row.addView(new Space(this), new LinearLayout.LayoutParams(0, Design.dp(this, 86), 1));
+                } else {
+                    row.addView(recoverySlotCell(m, idx), new LinearLayout.LayoutParams(0, Design.dp(this, 86), 1));
+                }
+            }
+            grid.addView(row, lp(-1, Design.dp(this, 86), 0, 0, 0, 8));
+        }
+        return grid;
+    }
+
+    private View recoverySlotCell(StateNft.Meta m, int idx) {
+        String image = localImage(m.localId, idx);
+        boolean ready = image != null && !image.isEmpty();
+        LinearLayout cell = vertical();
+        cell.setPadding(Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4));
+        cell.setBackground(Design.stroke(ready ? Design.PAPER() : 0xFFF1F1EF, ready ? Design.INK() : Design.RED()));
+        cell.setClickable(true);
+        cell.setOnClickListener(v -> {
+            if (ready) rotateRecoveryImage(m.localId, idx);
+            else pickRecoveryImage(m, idx);
+        });
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        img.setImageBitmap(Identicon.forToken("recover" + idx, 160));
+        if (ready) ImageLoader.loadOver(this, "data:image/jpeg;base64," + image, img);
+        cell.addView(img, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView label = text("#" + idx + (ready ? " rotate" : " missing"), 10,
+                ready ? Design.INK() : Design.RED(), Design.monoBold());
         label.setGravity(Gravity.CENTER);
         cell.addView(label, new LinearLayout.LayoutParams(-1, Design.dp(this, 22)));
         return cell;
@@ -1335,6 +1587,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pickImages() {
+        pendingPickContext = PICK_CREATE;
         pendingImageIndex = -1;
         pendingBatchImages = true;
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
@@ -1344,11 +1597,39 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pickImage(int idx) {
+        pendingPickContext = PICK_CREATE;
         pendingImageIndex = idx;
         pendingBatchImages = false;
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType("image/*");
         startActivityForResult(Intent.createChooser(i, "Choose StateNFT image"), 7001);
+    }
+
+    private void pickRecoveryImages(StateNft.Meta m) {
+        pendingPickContext = PICK_RECOVERY;
+        pendingRecoveryId = m.localId;
+        pendingImageIndex = firstMissingLocalImageIndex(m) - 1;
+        pendingBatchImages = true;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("image/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(Intent.createChooser(i, "Choose missing StateNFT images"), 7001);
+    }
+
+    private void pickRecoveryImage(StateNft.Meta m, int idx) {
+        pendingPickContext = PICK_RECOVERY;
+        pendingRecoveryId = m.localId;
+        pendingImageIndex = idx - 1;
+        pendingBatchImages = false;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("image/*");
+        startActivityForResult(Intent.createChooser(i, "Choose StateNFT image"), 7001);
+    }
+
+    private int firstMissingLocalImageIndex(StateNft.Meta m) {
+        if (m == null) return 1;
+        for (int i = 1; i <= m.size; i++) if (localImage(m.localId, i).isEmpty()) return i;
+        return 1;
     }
 
     private int parseInt(String s, int fallback) {

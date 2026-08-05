@@ -3,7 +3,7 @@
         <item name="android:fontFamily">@font/inter</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:colorAccent">#E9562B</item>
+        <item name="android:colorAccent">#111111</item>
     </style>
 
     <style name="Theme.StateNFT" parent="Base.Theme.StateNFT" />

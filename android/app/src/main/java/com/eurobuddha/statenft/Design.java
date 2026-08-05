@@ -25,15 +25,15 @@ public final class Design {
         if (sDisplay == null) sDisplay = Typeface.create("serif", Typeface.NORMAL);
     }
 
-    public static int BG() { return 0xFFF4F1EA; }
-    public static int PAPER() { return 0xFFFCFAF6; }
+    public static int BG() { return 0xFFF7F7F5; }
+    public static int PAPER() { return 0xFFFFFFFF; }
     public static int INK() { return 0xFF0A0A0B; }
     public static int GRAPHITE() { return 0xFF2B2B2F; }
-    public static int DIM() { return 0xFF6F6B63; }
-    public static int RAIL() { return 0xFFD6D0C5; }
-    public static int RAIL_DARK() { return 0xFFAAA194; }
-    public static int ACCENT() { return 0xFFE9562B; }
-    public static int RED() { return 0xFFB3261E; }
+    public static int DIM() { return 0xFF737373; }
+    public static int RAIL() { return 0xFFD9D9D6; }
+    public static int RAIL_DARK() { return 0xFF9A9A96; }
+    public static int ACCENT() { return 0xFF111111; }
+    public static int RED() { return 0xFFC1121F; }
     public static int GOOD() { return 0xFF187761; }
 
     public static Typeface sans() { return sSans != null ? sSans : Typeface.SANS_SERIF; }
@@ -66,7 +66,7 @@ public final class Design {
     }
 
     public static RippleDrawable ripple(GradientDrawable base) {
-        return new RippleDrawable(ColorStateList.valueOf(0x1AE9562B), base, null);
+        return new RippleDrawable(ColorStateList.valueOf(0x1A111111), base, null);
     }
 
     public static TextView chip(Context c, String text, int ink, int border) {

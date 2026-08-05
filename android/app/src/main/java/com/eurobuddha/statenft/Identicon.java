@@ -16,8 +16,8 @@ public final class Identicon {
         hex = sb.toString();
 
         int seed = Integer.parseInt(hex.substring(0, 4), 16);
-        int fg = (seed & 1) == 0 ? 0xFF111111 : 0xFFE9562B;
-        int bg = (seed & 2) == 0 ? 0xFFF4F1EA : 0xFFE8E2D7;
+        int fg = (seed & 1) == 0 ? 0xFF111111 : 0xFFC1121F;
+        int bg = (seed & 2) == 0 ? 0xFFFFFFFF : 0xFFE8E8E4;
 
         Bitmap bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
         Canvas cv = new Canvas(bmp);

@@ -56,6 +56,24 @@ public final class StateNft {
         Meta m = new Meta();
         m.tokenid = tokenid == null ? "" : tokenid;
         JSONObject root = tokenNode instanceof JSONObject ? (JSONObject) tokenNode : null;
+        if (root != null && root.opt("token") instanceof JSONObject) {
+            JSONObject wrapped = root.optJSONObject("token");
+            if (wrapped != null) {
+                try {
+                    JSONObject merged = new JSONObject(wrapped.toString());
+                    JSONArray names = root.names();
+                    if (names != null) {
+                        for (int i = 0; i < names.length(); i++) {
+                            String k = names.optString(i);
+                            if (!"token".equals(k) && !merged.has(k)) merged.put(k, root.opt(k));
+                        }
+                    }
+                    root = merged;
+                } catch (Exception ignored) {
+                    root = wrapped;
+                }
+            }
+        }
         JSONObject meta = null;
         if (root != null && root.opt("name") instanceof JSONObject) {
             meta = root.optJSONObject("name");
@@ -65,7 +83,7 @@ public final class StateNft {
             m.name = first(src.optString("name", ""), root.optString("name", ""), "Collection");
             m.description = first(src.optString("description", ""), root.optString("description", ""));
             m.mode = first(src.optString("mode", ""), root.optString("mode", ""), src.optString("base", "").isEmpty() ? "embed" : "url");
-            m.size = firstInt(src.opt("size"), root.opt("size"), root.opt("total"));
+            m.size = firstInt(src.opt("size"), root.opt("size"), root.opt("totalamount"), root.opt("total"));
             m.base = first(src.optString("base", ""), root.optString("base", ""));
             m.ext = first(src.optString("ext", ""), root.optString("ext", ""), ".png");
             m.icon = first(src.optString("url", ""), root.optString("url", ""), src.optString("icon", ""), root.optString("icon", ""));
@@ -119,11 +137,20 @@ public final class StateNft {
     }
 
     public static String state(JSONObject coin, int port) {
-        JSONArray st = coin == null ? null : coin.optJSONArray("state");
+        Object rawState = coin == null ? null : coin.opt("state");
+        JSONArray st = rawState instanceof JSONArray ? (JSONArray) rawState : null;
+        if (st == null && rawState instanceof JSONObject) {
+            Object direct = ((JSONObject) rawState).opt(String.valueOf(port));
+            if (direct != null) return cleanStateData(direct);
+        }
         if (st == null) return null;
         for (int i = 0; i < st.length(); i++) {
             JSONObject s = st.optJSONObject(i);
-            if (s != null && s.optInt("port", -1) == port) return String.valueOf(s.opt("data"));
+            if (s == null) continue;
+            String p = String.valueOf(s.opt("port"));
+            if ((p.matches("^[0-9]+$") && Integer.parseInt(p) == port) || String.valueOf(port).equals(p)) {
+                return cleanStateData(s.opt("data"));
+            }
         }
         return null;
     }
@@ -154,7 +181,7 @@ public final class StateNft {
     public static String imageUrl(Meta meta, int idx, JSONObject coin) {
         String embedded = state(coin, 1);
         if (embedded != null && embedded.startsWith("[") && embedded.endsWith("]")) {
-            return "data:image/png;base64," + embedded.substring(1, embedded.length() - 1);
+            return "data:image/jpeg;base64," + embedded.substring(1, embedded.length() - 1);
         }
         if (meta != null && !meta.base.isEmpty()) return meta.base + idx + (meta.ext == null ? "" : meta.ext);
         return IconResolver.resolve(meta == null ? "" : meta.icon);
@@ -247,6 +274,7 @@ public final class StateNft {
             if (v instanceof Number) return ((Number) v).intValue();
             try {
                 String s = String.valueOf(v).trim();
+                if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
                 if (!s.isEmpty()) return Integer.parseInt(s);
             } catch (Exception ignored) {}
         }
@@ -255,5 +283,14 @@ public final class StateNft {
 
     private static void put(JSONObject o, String k, Object v) {
         try { o.put(k, v); } catch (Exception ignored) {}
+    }
+
+    private static String cleanStateData(Object v) {
+        if (v == null) return null;
+        String s = String.valueOf(v).trim();
+        if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            s = s.substring(1, s.length() - 1);
+        }
+        return s;
     }
 }
