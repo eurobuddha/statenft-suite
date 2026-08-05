@@ -4,3 +4,7 @@ nohup.out
 graphify-out/
 __pycache__/
 *.pyc
+android/.gradle/
+android/build/
+android/local.properties
+android/app/build/
