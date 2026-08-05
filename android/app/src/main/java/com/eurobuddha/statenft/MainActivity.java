@@ -56,12 +56,18 @@ public class MainActivity extends AppCompatActivity {
     private String[] createImages = new String[0];
     private int pendingImageIndex = -1;
     private boolean pendingBatchImages = false;
+    private boolean jumpCreateImages = false;
 
     private final Runnable mintLoop = new Runnable() {
         @Override public void run() {
             if (node != null && node.isEnabled()) {
                 MintEngine.tick(MainActivity.this, node, msg -> {
                     if (inlineStatus != null) setInlineStatus(msg);
+                    if (openMeta != null && activeMint(openMeta)) {
+                        loadLocalCollections();
+                        openMeta = findCollectionByLocalId(openMeta.localId, openMeta);
+                        refreshDetail();
+                    }
                 });
             }
             main.postDelayed(this, 25000);
@@ -82,7 +88,8 @@ public class MainActivity extends AppCompatActivity {
         w.setStatusBarColor(Design.BG());
         w.setNavigationBarColor(Design.BG());
         node = new NodeApi(this, enabled -> refreshNodeChip());
-        renderLaunch();
+        renderCollections();
+        main.postDelayed(() -> { if (node != null && !node.isEnabled()) node.reRegister(); }, 900);
         main.postDelayed(rePair, 12000);
         main.postDelayed(mintLoop, 5000);
     }
@@ -113,6 +120,7 @@ public class MainActivity extends AppCompatActivity {
                     int added = batch ? applyPickedImages(start, out) : applyReplacementImage(start, out);
                     toast(added == 0 ? "Could not process selected image"
                             : (batch ? added + " images added" : "Image added for item #" + (start + 1)));
+                    jumpCreateImages = true;
                     renderCreate();
                 });
             }).start();
@@ -180,7 +188,7 @@ public class MainActivity extends AppCompatActivity {
             body.addView(empty, lp(-1, -2, 20, 0, 20, 18));
         } else {
             body.addView(sectionLabel("Collections"), lp(-1, -2, 20, 0, 20, 8));
-            for (StateNft.Meta m : collections) body.addView(collectionRow(m), lp(-1, Design.dp(this, 92), 20, 0, 20, 8));
+            for (StateNft.Meta m : collections) body.addView(collectionRow(m), lp(-1, -2, 20, 0, 20, 10));
         }
         root.addView(bottomNav(0));
         setContentView(page);
@@ -313,6 +321,7 @@ public class MainActivity extends AppCompatActivity {
                 saveCreateDraft(name, desc, size, baseField[0], extField[0], iconField[0], externalField[0], webField[0]);
                 pickImages();
             }), lp(-1, Design.dp(this, 52), 20, 0, 20, 8));
+            body.addView(imageSlotGrid(), lp(-1, -2, 20, 0, 20, 10));
             for (int i = 0; i < createImages.length; i++) {
                 final int idx = i;
                 String label = createImages[i] == null || createImages[i].isEmpty()
@@ -329,6 +338,10 @@ public class MainActivity extends AppCompatActivity {
 
         root.addView(bottomNav(1));
         setContentView(page);
+        if (jumpCreateImages) {
+            jumpCreateImages = false;
+            main.postDelayed(() -> page.smoothScrollTo(0, Design.dp(this, 760)), 120);
+        }
     }
 
     private void createCollection(EditText name, EditText desc, EditText size, EditText base,
@@ -374,7 +387,7 @@ public class MainActivity extends AppCompatActivity {
                 m.size = count;
                 m.base = "url".equals(createMode) ? b : "";
                 m.ext = extValue;
-                m.icon = ic;
+                m.icon = !ic.isEmpty() ? ic : ("embed".equals(createMode) && createImages.length > 0 ? createImages[0] : "");
                 m.externalUrl = ex;
                 m.webvalidate = w;
                 m.creatorAddr = r.optString("address");
@@ -508,6 +521,8 @@ public class MainActivity extends AppCompatActivity {
         StateNft.Item firstOwned = null;
         for (StateNft.Item item : items) if (item.owned && firstOwned == null) firstOwned = item;
         String heroUrl = !items.isEmpty() ? items.get(0).imageUrl : IconResolver.resolve(m.icon);
+
+        if (activeMint(m)) body.addView(mintStatusPanel(m, items), lp(-1, -2, 20, 8, 20, 12));
 
         ImageView hero = new ImageView(this);
         hero.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -787,31 +802,181 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private View collectionRow(StateNft.Meta m) {
-        LinearLayout row = horizontal(12, Gravity.CENTER_VERTICAL);
-        row.setPadding(Design.dp(this, 10), Design.dp(this, 8), Design.dp(this, 10), Design.dp(this, 8));
+        LinearLayout row = vertical();
+        row.setPadding(Design.dp(this, 10), Design.dp(this, 10), Design.dp(this, 10), Design.dp(this, 10));
         row.setBackground(Design.stroke(Design.PAPER(), Design.RAIL()));
         row.setClickable(true);
         Design.pressable(row);
         row.setOnClickListener(v -> openCollection(m));
 
+        LinearLayout top = horizontal(12, Gravity.CENTER_VERTICAL);
         ImageView img = new ImageView(this);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
         img.setImageBitmap(Identicon.forToken(m.tokenid, 160));
-        String icon = IconResolver.resolve(m.icon);
+        String icon = collectionLeadImage(m);
         if (icon != null) ImageLoader.loadOver(this, icon, img);
-        row.addView(img, new LinearLayout.LayoutParams(Design.dp(this, 64), Design.dp(this, 64)));
+        top.addView(img, new LinearLayout.LayoutParams(Design.dp(this, 66), Design.dp(this, 66)));
 
         LinearLayout copy = vertical();
         copy.addView(text(m.name, 15, Design.INK(), Design.sansBold()));
-        copy.addView(text(Util.shorten(m.tokenid), 11, Design.DIM(), Design.mono()));
-        copy.addView(text("Items " + m.size + "   Owned " + m.owned, 12, Design.GRAPHITE(), Design.sans()));
-        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        copy.addView(text(m.tokenid == null || m.tokenid.isEmpty() ? "Token not created yet" : Util.shorten(m.tokenid), 11, Design.DIM(), Design.mono()));
+        copy.addView(text(collectionProgressText(m), 12, Design.GRAPHITE(), Design.sans()));
+        top.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView badge = Design.chip(this, m.minted >= m.size && m.size > 0 ? "Minted" : "Needs Images",
-                m.minted >= m.size && m.size > 0 ? Design.GOOD() : Design.ACCENT(), Design.RAIL());
-        row.addView(badge);
-        row.addView(text(">", 24, Design.INK(), Design.sans()));
+        TextView badge = Design.chip(this, collectionStatus(m),
+                collectionStatusColor(m), Design.RAIL());
+        top.addView(badge);
+        top.addView(text(">", 24, Design.INK(), Design.sans()));
+        row.addView(top);
+        row.addView(progressBar(collectionProgress(m)), lp(-1, Design.dp(this, 5), 78, 8, 8, 8));
+        row.addView(thumbnailStrip(m, 6), lp(-1, Design.dp(this, 42), 78, 0, 8, 0));
         return row;
+    }
+
+    private String collectionLeadImage(StateNft.Meta m) {
+        String icon = IconResolver.resolve(m == null ? "" : m.icon);
+        if (icon != null && !icon.isEmpty()) return icon;
+        List<StateNft.Item> local = localItemsForMeta(m);
+        if (!local.isEmpty()) return local.get(0).imageUrl;
+        return null;
+    }
+
+    private LinearLayout mintStatusPanel(StateNft.Meta m, List<StateNft.Item> items) {
+        LinearLayout panel = panel(14);
+        LinearLayout head = horizontal(10, Gravity.CENTER_VERTICAL);
+        LinearLayout copy = vertical();
+        copy.addView(text(collectionStatus(m), 19, Design.INK(), Design.sansBold()));
+        copy.addView(text(collectionProgressText(m), 12, Design.GRAPHITE(), Design.sans()));
+        head.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView live = Design.chip(this, activeMint(m) ? "Live" : "Done", activeMint(m) ? Design.ACCENT() : Design.GOOD(), Design.RAIL());
+        head.addView(live);
+        panel.addView(head);
+        panel.addView(phaseRail(m), lp(-1, Design.dp(this, 42), 0, 14, 0, 8));
+        panel.addView(progressBar(collectionProgress(m)), lp(-1, Design.dp(this, 6), 0, 0, 0, 12));
+        panel.addView(mintThumbStrip(items, 8), lp(-1, Design.dp(this, 54), 0, 0, 0, 8));
+        String msg = "NEEDIMAGES".equals(m.phase)
+                ? "Add the missing embedded images, then resume minting."
+                : "The app advances this collection through create, move, split and stamp while it is open.";
+        panel.addView(note(msg));
+        if (m.error != null && !m.error.isEmpty()) panel.addView(text(m.error, 12, Design.RED(), Design.sansBold()), lp(-1, -2, 0, 8, 0, 0));
+        return panel;
+    }
+
+    private LinearLayout phaseRail(StateNft.Meta m) {
+        String[] phases = {"CREATE", "MOVE", "SPLIT", "STAMP", "DONE"};
+        String phase = m == null || m.phase == null ? "" : m.phase;
+        int current = phaseIndex(phase);
+        LinearLayout rail = horizontal(4, Gravity.CENTER_VERTICAL);
+        for (int i = 0; i < phases.length; i++) {
+            boolean done = current > i || ("DONE".equals(phase) && i == phases.length - 1);
+            boolean now = current == i && !"DONE".equals(phase);
+            TextView chip = Design.chip(this, phases[i], done ? Design.GOOD() : (now ? Design.ACCENT() : Design.DIM()), now ? Design.ACCENT() : Design.RAIL());
+            rail.addView(chip, new LinearLayout.LayoutParams(0, Design.dp(this, 34), 1));
+        }
+        return rail;
+    }
+
+    private int phaseIndex(String phase) {
+        if ("CREATE".equals(phase)) return 0;
+        if ("MOVE".equals(phase)) return 1;
+        if ("SPLIT".equals(phase)) return 2;
+        if ("STAMP".equals(phase) || "NEEDIMAGES".equals(phase)) return 3;
+        if ("DONE".equals(phase)) return 4;
+        return 0;
+    }
+
+    private LinearLayout mintThumbStrip(List<StateNft.Item> items, int max) {
+        LinearLayout strip = horizontal(6, Gravity.CENTER_VERTICAL);
+        int count = Math.min(max, items == null ? 0 : items.size());
+        for (int i = 0; i < count; i++) {
+            StateNft.Item it = items.get(i);
+            LinearLayout cell = vertical();
+            cell.setBackground(Design.stroke(it.coin != null ? Design.PAPER() : 0xFFF7F4EE, it.coin != null ? Design.ACCENT() : Design.RAIL()));
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            iv.setImageBitmap(Identicon.forToken("mint" + i, 80));
+            if (it.imageUrl != null && !it.imageUrl.isEmpty()) ImageLoader.loadOver(this, it.imageUrl, iv);
+            cell.addView(iv, new LinearLayout.LayoutParams(-1, 0, 1));
+            TextView lab = text("#" + it.index, 9, Design.DIM(), Design.monoBold());
+            lab.setGravity(Gravity.CENTER);
+            cell.addView(lab, new LinearLayout.LayoutParams(-1, Design.dp(this, 16)));
+            strip.addView(cell, new LinearLayout.LayoutParams(Design.dp(this, 48), Design.dp(this, 54)));
+        }
+        if (count == 0) strip.addView(note("Images will appear here as they are selected or stamped."));
+        return strip;
+    }
+
+    private String collectionStatus(StateNft.Meta m) {
+        String p = m == null || m.phase == null ? "DONE" : m.phase;
+        if ("CREATE".equals(p)) return "Creating";
+        if ("MOVE".equals(p)) return "Moving";
+        if ("SPLIT".equals(p)) return "Splitting";
+        if ("STAMP".equals(p)) return "Stamping";
+        if ("NEEDIMAGES".equals(p)) return "Images Needed";
+        if ("BURIED".equals(p)) return "Buried";
+        if (m != null && m.size > 0 && m.minted >= m.size) return "Minted";
+        return "Open";
+    }
+
+    private int collectionStatusColor(StateNft.Meta m) {
+        String p = m == null || m.phase == null ? "DONE" : m.phase;
+        if ("DONE".equals(p) && m != null && m.size > 0 && m.minted >= m.size) return Design.GOOD();
+        if ("BURIED".equals(p)) return Design.DIM();
+        if ("NEEDIMAGES".equals(p)) return Design.RED();
+        return Design.ACCENT();
+    }
+
+    private boolean activeMint(StateNft.Meta m) {
+        String p = m == null || m.phase == null ? "" : m.phase;
+        return "CREATE".equals(p) || "MOVE".equals(p) || "SPLIT".equals(p) || "STAMP".equals(p) || "NEEDIMAGES".equals(p);
+    }
+
+    private String collectionProgressText(StateNft.Meta m) {
+        if (m == null) return "";
+        String stage = collectionStatus(m);
+        int minted = Math.max(0, m.minted);
+        int size = Math.max(0, m.size);
+        return stage + "   Items " + size + "   Stamped " + minted + "/" + size + "   Owned " + m.owned;
+    }
+
+    private float collectionProgress(StateNft.Meta m) {
+        if (m == null) return 0f;
+        if (m.size > 0 && m.minted > 0) return Math.min(1f, m.minted / (float) m.size);
+        String p = m.phase == null ? "" : m.phase;
+        if ("CREATE".equals(p)) return 0.12f;
+        if ("MOVE".equals(p)) return 0.28f;
+        if ("SPLIT".equals(p)) return 0.48f;
+        if ("STAMP".equals(p)) return 0.68f;
+        if ("DONE".equals(p)) return 1f;
+        return 0f;
+    }
+
+    private View progressBar(float pct) {
+        LinearLayout outer = horizontal(0, Gravity.CENTER_VERTICAL);
+        outer.setBackground(Design.stroke(0x00FFFFFF, Design.RAIL()));
+        TextView fill = new TextView(this);
+        fill.setBackgroundColor(Design.ACCENT());
+        outer.addView(fill, new LinearLayout.LayoutParams(0, -1, Math.max(0.02f, Math.min(1f, pct))));
+        Space rest = new Space(this);
+        outer.addView(rest, new LinearLayout.LayoutParams(0, -1, Math.max(0.02f, 1f - Math.min(1f, pct))));
+        return outer;
+    }
+
+    private LinearLayout thumbnailStrip(StateNft.Meta m, int max) {
+        LinearLayout strip = horizontal(6, Gravity.CENTER_VERTICAL);
+        List<StateNft.Item> items = localItemsForMeta(m);
+        if (items.isEmpty() && m != null) items = StateNft.items(m, openOwned, openAll);
+        int count = Math.min(max, items.size());
+        for (int i = 0; i < count; i++) {
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            iv.setImageBitmap(Identicon.forToken((m == null ? "" : m.tokenid) + i, 80));
+            String url = items.get(i).imageUrl;
+            if (url != null && !url.isEmpty()) ImageLoader.loadOver(this, url, iv);
+            strip.addView(iv, new LinearLayout.LayoutParams(Design.dp(this, 38), Design.dp(this, 38)));
+        }
+        if (count == 0) strip.addView(note("No images visible yet"));
+        return strip;
     }
 
     private LinearLayout appBar(String title, View.OnClickListener back, boolean menu) {
@@ -1041,6 +1206,7 @@ public class MainActivity extends AppCompatActivity {
 
     private List<StateNft.Item> localItemsForMeta(StateNft.Meta m) {
         ArrayList<StateNft.Item> out = new ArrayList<>();
+        if (m == null) return out;
         JSONObject row = LocalStore.findById(this, m.localId);
         JSONArray items = row == null ? new JSONArray() : MintEngine.localItems(row);
         for (int i = 0; i < items.length(); i++) {
@@ -1086,6 +1252,43 @@ public class MainActivity extends AppCompatActivity {
         createExternal = "";
         createWeb = "";
         createImages = new String[0];
+    }
+
+    private LinearLayout imageSlotGrid() {
+        LinearLayout grid = vertical();
+        int cols = 4;
+        for (int i = 0; i < createImages.length; i += cols) {
+            LinearLayout row = horizontal(8, Gravity.CENTER);
+            for (int c = 0; c < cols; c++) {
+                int idx = i + c;
+                if (idx >= createImages.length) {
+                    Space s = new Space(this);
+                    row.addView(s, new LinearLayout.LayoutParams(0, Design.dp(this, 86), 1));
+                    continue;
+                }
+                row.addView(imageSlotCell(idx), new LinearLayout.LayoutParams(0, Design.dp(this, 86), 1));
+            }
+            grid.addView(row, lp(-1, Design.dp(this, 86), 0, 0, 0, 8));
+        }
+        return grid;
+    }
+
+    private View imageSlotCell(int idx) {
+        LinearLayout cell = vertical();
+        cell.setPadding(Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4), Design.dp(this, 4));
+        boolean ready = idx < createImages.length && createImages[idx] != null && !createImages[idx].isEmpty();
+        cell.setBackground(Design.stroke(ready ? Design.PAPER() : 0xFFF7F4EE, ready ? Design.INK() : Design.RAIL()));
+        cell.setClickable(true);
+        cell.setOnClickListener(v -> pickImage(idx));
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        img.setImageBitmap(Identicon.forToken("slot" + idx, 160));
+        if (ready) ImageLoader.loadOver(this, "data:image/jpeg;base64," + createImages[idx], img);
+        cell.addView(img, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView label = text("#" + (idx + 1) + (ready ? " ready" : " empty"), 10, ready ? Design.INK() : Design.DIM(), Design.monoBold());
+        label.setGravity(Gravity.CENTER);
+        cell.addView(label, new LinearLayout.LayoutParams(-1, Design.dp(this, 22)));
+        return cell;
     }
 
     private ArrayList<Uri> selectedImageUris(Intent data) {
