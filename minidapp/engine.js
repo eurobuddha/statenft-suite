@@ -91,7 +91,8 @@ var ENGINE_MIGRATIONS = [
   "`webvalidate` varchar(512)",
   "`externalurl` varchar(512)",
   "`iscreator` int DEFAULT 0",
-  "`postedat` int DEFAULT 0"
+  "`postedat` int DEFAULT 0",
+  "`buriedat` int DEFAULT 0"
 ];
 
 function engineInitTables(cb) {
@@ -583,7 +584,13 @@ function enginePhaseNeedImages(row, done) {
  * (owner sig only); unstamped coins add the creator sig for the bypass. */
 function enginePhaseBury(row, tip, done) {
   engineTokenCoins(row.TOKENID, function (coins) {
-    if (coins.length === 0) { engineSetPhase(row, "BURIED", done); return; }
+    if (coins.length === 0) {
+      // record the burial block: the UI grants a 50-block grace at the
+      // graveside, then the row leaves the catalogue for good
+      MDS.sql("UPDATE collections SET buriedat=" + tip + " WHERE id=" + row.ID,
+        function () { engineSetPhase(row, "BURIED", done); });
+      return;
+    }
     engineEach(coins, function (c, next) {
       if (!enginePendingOk(c.coinid, tip)) { next(); return; }
       engineMarkPending(c.coinid, tip);

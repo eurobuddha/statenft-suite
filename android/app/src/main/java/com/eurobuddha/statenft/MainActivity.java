@@ -65,6 +65,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private String lastGallerySig = "";
     private String lastDetailSig = "";
     private boolean detailPartial = false;
+    private int lastTip = 0;
     private final ArrayList<Runnable> departureWatchers = new ArrayList<>();
 
     /* chrome */
@@ -464,11 +465,16 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
         boolean any = false;
         if (galleryFilter.equals("all") || galleryFilter.equals("coll") || galleryFilter.equals("mine")) {
-            List<StateNft.Meta> list = new ArrayList<>(collections);
-            if (galleryFilter.equals("mine")) {
-                List<StateNft.Meta> mine = new ArrayList<>();
-                for (StateNft.Meta m : list) if (m.created) mine.add(m);
-                list = mine;
+            List<StateNft.Meta> list = new ArrayList<>();
+            for (StateNft.Meta m : collections) {
+                // burial means gone: a fresh grave shows for 50 blocks, then
+                // the collection leaves the catalogue for good
+                if ("BURIED".equals(m.phase)) {
+                    boolean fresh = m.buriedAt > 0 && lastTip > 0 && (lastTip - m.buriedAt) <= 50;
+                    if (!fresh) continue;
+                }
+                if (galleryFilter.equals("mine") && !m.created) continue;
+                list.add(m);
             }
             if (!list.isEmpty()) {
                 any = true;
@@ -648,6 +654,13 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     private void galleryScan() {
         if (node == null || !node.isEnabled()) return;
+        node.cmd("block", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject r = json.optJSONObject("response");
+                if (r != null) lastTip = r.optInt("block", lastTip);
+            }
+            @Override public void onError(String message) {}
+        });
         node.cmd("balance", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 JSONArray bal = json.optJSONArray("response");
@@ -1109,6 +1122,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             } else {
                 msg.setText("Burial transactions posted.");
                 toast("Burial posted");
+                markBuriedWhenEmpty(m);
             }
             openCollection(m);
             return;
@@ -1118,6 +1132,36 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         msg.setText("Burying " + (i + 1) + " / " + coins.length() + "…");
         String txn = "bury" + (System.currentTimeMillis() % 100000);
         runBury(m, coins, i, c, txn, StateNft.replayableState(c), partial, msg);
+    }
+
+    /** Once every posted burial confirms and no coins remain, mark the row
+     *  BURIED with the burial block — the gallery shows a fresh grave for
+     *  50 blocks, then the collection leaves the catalogue for good. */
+    private void markBuriedWhenEmpty(StateNft.Meta m) {
+        final Runnable[] check = new Runnable[1];
+        final int[] tries = {0};
+        check[0] = () -> MintEngine.tokenCoinsBounded(node, m.tokenid, true, (coins, partial) -> {
+            if (coins.length() == 0 && !partial) {
+                node.cmd("block", new NodeApi.Cb() {
+                    @Override public void onResult(JSONObject json) {
+                        JSONObject r = json.optJSONObject("response");
+                        int tip = r == null ? 0 : r.optInt("block", 0);
+                        JSONObject row = LocalStore.findById(MainActivity.this, m.localId);
+                        if (row == null) row = LocalStore.findByTokenid(MainActivity.this, m.tokenid);
+                        if (row == null) return;
+                        put(row, "phase", "BURIED");
+                        put(row, "buriedat", tip);
+                        LocalStore.upsert(MainActivity.this, row);
+                        loadLocalCollections();
+                        if (screen == Screen.COLLECTION) refreshDetail();
+                    }
+                    @Override public void onError(String message) {}
+                });
+            } else if (++tries[0] < 20) {
+                main.postDelayed(check[0], 20000);
+            }
+        }, e -> { if (++tries[0] < 20) main.postDelayed(check[0], 20000); });
+        main.postDelayed(check[0], 20000);
     }
 
     private void runBury(StateNft.Meta m, JSONArray coins, int i, JSONObject c, String txn,

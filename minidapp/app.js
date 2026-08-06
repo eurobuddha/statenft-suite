@@ -193,9 +193,15 @@ function loadCollectionList() {
     var rows = res.rows || [];
     var list = $("collection-list");
     list.innerHTML = "";
-    $("collections-empty").classList.toggle("hidden", rows.length > 0);
     var live = rows.filter(function (r) { return r.PHASE !== "BURIED"; });
-    var buried = rows.filter(function (r) { return r.PHASE === "BURIED"; });
+    // Burial means gone: a fresh grave shows for 50 blocks (so you can see
+    // what you just buried), then the row leaves the catalogue forever.
+    var buried = rows.filter(function (r) {
+      if (r.PHASE !== "BURIED") { return false; }
+      var at = parseInt(r.BURIEDAT, 10) || 0;
+      return at > 0 && CUR_BLOCK > 0 && (CUR_BLOCK - at) <= 50;
+    });
+    $("collections-empty").classList.toggle("hidden", (live.length + buried.length) > 0);
     live.forEach(function (row) { list.appendChild(collectionCard(row)); });
     if (buried.length) {
       var head = document.createElement("p");

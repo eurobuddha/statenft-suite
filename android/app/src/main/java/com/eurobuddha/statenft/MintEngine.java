@@ -506,6 +506,7 @@ public final class MintEngine {
         m.postedAt = row.optInt("postedat", 0);
         m.owned = row.optInt("owned", 0);
         m.minted = row.optInt("minted", 0);
+        m.buriedAt = row.optInt("buriedat", 0);
         m.created = row.optInt("created", 1) == 1;
         m.creator = m.created;
         return m;
@@ -532,6 +533,7 @@ public final class MintEngine {
         put(row, "created", m.created ? 1 : 0);
         put(row, "owned", m.owned);
         put(row, "minted", m.minted);
+        put(row, "buriedat", m.buriedAt);
         put(row, "error", m.error);
         put(row, "items", items == null ? new JSONArray() : items);
         return row;

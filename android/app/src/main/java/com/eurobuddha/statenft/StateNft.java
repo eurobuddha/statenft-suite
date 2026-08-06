@@ -43,6 +43,7 @@ public final class StateNft {
         public int owned = 0;
         public int minted = 0;
         public int totalSeen = 0;
+        public int buriedAt = 0;               // block of confirmed burial (grave shows 50 blocks)
         public JSONObject itemTraits = null;   // collection metadata: {"1":[{trait_type,value}], …}
         public JSONArray attributes = null;    // single-NFT metadata attributes array
     }
