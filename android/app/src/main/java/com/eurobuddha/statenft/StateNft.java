@@ -89,7 +89,9 @@ public final class StateNft {
             m.size = firstInt(src.opt("size"), root.opt("size"), root.opt("totalamount"), root.opt("total"));
             m.base = first(src.optString("base", ""), root.optString("base", ""));
             m.ext = first(src.optString("ext", ""), root.optString("ext", ""), ".png");
-            m.icon = first(src.optString("url", ""), root.optString("url", ""), src.optString("icon", ""), root.optString("icon", ""));
+            m.icon = first(src.optString("url", ""), root.optString("url", ""),
+                    src.optString("image", ""), root.optString("image", ""),
+                    src.optString("icon", ""), root.optString("icon", ""));
             m.externalUrl = first(src.optString("external_url", ""), root.optString("external_url", ""));
             m.webvalidate = first(src.optString("webvalidate", ""), root.optString("webvalidate", ""));
             m.itemTraits = src.optJSONObject("traits") != null ? src.optJSONObject("traits") : root.optJSONObject("traits");

@@ -1852,7 +1852,7 @@ function singleCard(row) {
     "<div class='cc-sub'></div></div>";
   var img = el.querySelector("img");
   img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
-  img.src = iconSrc(m.url || "") || placeholderSVG(1);
+  img.src = iconSrc(m.url || m.image || m.icon || "") || placeholderSVG(1);
   el.querySelector(".nft-no").textContent = "ed. " + (row.total || "1");
   el.querySelector(".cc-name").textContent = m.name || "NFT";
   el.querySelector(".cc-sub").textContent = shortHash(row.tokenid);
@@ -1871,7 +1871,7 @@ function tokenRowEl(row) {
     "<div class='tr-sub'></div></div><span class='chip-hash'>id</span>";
   var img = el.querySelector("img");
   img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
-  img.src = iconSrc(m.url || "") || placeholderSVG(1);
+  img.src = iconSrc(m.url || m.image || m.icon || "") || placeholderSVG(1);
   el.querySelector(".tr-name").textContent =
     name + (m.ticker ? " · " + m.ticker.toUpperCase() : "");
   el.querySelector(".tr-sub").textContent =

@@ -31,11 +31,16 @@ public final class IconResolver {
         }
         if (DATA_IMG.matcher(t).find()) return t;
         if (HTTP.matcher(t).find()) return t;
+        if (t.regionMatches(true, 0, "ipfs://", 0, 7)) {
+            String path = t.substring(7);
+            if (path.matches("^[A-Za-z0-9/._-]+$")) return "https://ipfs.io/ipfs/" + path;
+        }
         if (t.regionMatches(true, 0, "<svg", 0, 4) && t.toLowerCase().endsWith("</svg>")) {
             try { return "data:image/svg+xml;base64," + Base64.encodeToString(t.getBytes("UTF-8"), Base64.NO_WRAP); }
             catch (Exception e) { return null; }
         }
-        if (t.length() >= 100 && B64.matcher(t).matches()) return ImageTools.dataUri(t);
+        String bare = t.replaceAll("\\s+", "");   // tolerate line-wrapped base64
+        if (bare.length() >= 100 && B64.matcher(bare).matches()) return ImageTools.dataUri(bare);
         return null;
     }
 }

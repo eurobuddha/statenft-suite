@@ -82,6 +82,15 @@ console.log("iconSrc — real values accepted");
 check("hosted animated gif", iconSrc(REAL.animatedIcon), REAL.animatedIcon);
 check("raw webp b64 gets an honest webp mime",
   iconSrc("UklGRj8/Pz9XRUJQVlA4"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
+check("full data-image URI passes through (marketplace convention)",
+  iconSrc("data:image/png;base64,iVBORw0KGgoAAA=="), "data:image/png;base64,iVBORw0KGgoAAA==");
+rejects(iconSrc, "data:text/html smuggle", "data:text/html;base64,PHNjcmlwdD4=");
+rejects(iconSrc, "data URI with markup payload", "data:image/png;base64,<img onerror=x>");
+check("ipfs pointer resolves via gateway",
+  iconSrc("ipfs://QmTestCID123/art.png"), "https://ipfs.io/ipfs/QmTestCID123/art.png");
+rejects(iconSrc, "ipfs with hostile chars", "ipfs://x\"><script>");
+check("line-wrapped raw b64 accepted",
+  iconSrc("UklG\nRj8/Pz9X\nRUJQVlA4"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
 check("webp data URI allowed in cssUrl",
   cssUrl("data:image/webp;base64,UklGRg=="), "data:image/webp;base64,UklGRg==");
 accepts(iconSrc, "<artimage> base64 icon", REAL.artimageIcon);

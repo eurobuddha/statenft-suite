@@ -78,7 +78,16 @@ function iconSrc(icon) {
     ? ("" + icon).substring(10) : ("" + icon);
   var hosted = safeUrl(raw);
   if (hosted) { return hosted; }
-  if (/^[A-Za-z0-9+/=]+$/.test(raw)) { return "data:" + b64Mime(raw) + ";base64," + raw; }
+  // marketplace convention: the url IS a full data-image URI — allow only
+  // image mimes with a pure-base64 payload, so it can never smuggle markup
+  var dm = raw.match(/^data:image\/(jpeg|png|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (dm) { return "data:image/" + dm[1] + ";base64," + dm[2].replace(/\s+/g, ""); }
+  // ipfs pointers resolve through the public gateway
+  var im = raw.match(/^ipfs:\/\/([A-Za-z0-9/._-]+)$/i);
+  if (im) { return "https://ipfs.io/ipfs/" + im[1]; }
+  // raw base64 — tolerate line-wrapped payloads from other minters
+  var bare = raw.replace(/\s+/g, "");
+  if (/^[A-Za-z0-9+/=]+$/.test(bare)) { return "data:" + b64Mime(bare) + ";base64," + bare; }
   return null;
 }
 
