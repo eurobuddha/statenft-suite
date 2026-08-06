@@ -1431,3 +1431,372 @@ $("insp-stage").addEventListener("touchend", inspTouchEnd, { passive: true });
 $("insp-stage").addEventListener("click", function (e) {
   if (e.target === this) { closeInspector(); }
 });
+
+/* ============================================================
+   ATELIER STUDIO — single-NFT + custom-token wizards, singles &
+   tokens catalogue. Mirrors the native Android build's metadata
+   conventions exactly (nft:"true", owner, attributes, artimage).
+   ============================================================ */
+
+var ARTIMAGE_BUDGET = 9000;
+var NFT_ART = "";        // sealed b64 (compressed raster or sanitized SVG)
+var NFT_TRAITS = [];     // [ [type, value] ]
+var TOKEN_ICON = "";
+var TOKEN_PAIRS = [];    // [ [key, value] ]
+var RESERVED_KEYS = ["name", "url", "description", "ticker", "webvalidate",
+                     "external_url", "owner", "nft", "icon", "attributes"];
+
+function validCmdUrl(u) {
+  return !u || (u.indexOf(" ") < 0 && u.indexOf('"') < 0 &&
+                u.indexOf("'") < 0 && u.indexOf(";") < 0);
+}
+
+/* SVG lane: strip active content before sealing — mirrors SvgSanitizer.java */
+function svgSanitize(text) {
+  if (!/^\s*(<\?xml[\s\S]*?\?>\s*)?(<!--[\s\S]*?-->\s*)*<svg/i.test(text)) { return null; }
+  var s = text;
+  s = s.replace(/<!DOCTYPE[\s\S]*?>|<!ENTITY[\s\S]*?>/gi, "");
+  s = s.replace(/<script[\s\S]*?<\/script\s*>|<script[^>]*\/\s*>/gi, "");
+  s = s.replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>|<foreignObject[^>]*\/\s*>/gi, "");
+  s = s.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  s = s.replace(/(href|xlink:href)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, "");
+  s = s.replace(/(href|xlink:href)\s*=\s*(["'])(?!#)[^"']*\2/gi, "");
+  return s.replace(/^\s+|\s+$/g, "");
+}
+
+function b64Unicode(s) {
+  return btoa(unescape(encodeURIComponent(s)));
+}
+
+/* ---------- studio hub ---------- */
+
+function studioShow(panel) {
+  $("studio-hub").classList.toggle("hidden", panel !== "hub");
+  $("wiz-collection").classList.toggle("hidden", panel !== "collection");
+  $("wiz-nft").classList.toggle("hidden", panel !== "nft");
+  $("wiz-token").classList.toggle("hidden", panel !== "token");
+}
+
+$("hub-collection").onclick = function () { studioShow("collection"); };
+$("hub-nft").onclick = function () { studioShow("nft"); updateNftPreview(); };
+$("hub-token").onclick = function () { studioShow("token"); updateTokenPreview(); };
+$("coll-hub-back").onclick = function () { studioShow("hub"); };
+$("nft-hub-back").onclick = function () { studioShow("hub"); };
+$("token-hub-back").onclick = function () { studioShow("hub"); };
+/* entering the Studio tab always lands on the hub */
+$("tab-create").addEventListener("click", function () { studioShow("hub"); });
+$("tab-collections").addEventListener("click", function () { loadSingles(); });
+
+/* ---------- single NFT ---------- */
+
+function nftArtPicked(f) {
+  if (!f) { return; }
+  var isSvg = /\.svg$/i.test(f.name || "") || f.type === "image/svg+xml";
+  if (isSvg) {
+    var r = new FileReader();
+    r.onload = function () {
+      var clean = svgSanitize("" + r.result);
+      if (!clean) { toast("that SVG could not be made inert"); return; }
+      var b64 = b64Unicode(clean);
+      if (b64.length > ARTIMAGE_BUDGET) { toast("SVG too large for the artimage budget"); return; }
+      NFT_ART = b64;
+      nftArtShow();
+    };
+    r.readAsText(f);
+    return;
+  }
+  compressImage(f, ARTIMAGE_BUDGET, function (b64) {
+    if (!b64) { toast("could not compress that image"); return; }
+    NFT_ART = b64;
+    nftArtShow();
+  });
+}
+
+function nftArtShow() {
+  var drop = $("nft-art-drop");
+  drop.classList.add("filled");
+  drop.style.backgroundImage = "url(\"" + cssUrl(b64src(NFT_ART)) + "\")";
+  $("nft-art-hint").innerText = "";
+  updateNftPreview();
+}
+
+function renderTraits() {
+  var box = $("n-traits");
+  box.innerHTML = "";
+  NFT_TRAITS.forEach(function (t, i) {
+    var row = document.createElement("div");
+    row.className = "trait-row";
+    var k = document.createElement("input");
+    k.type = "text"; k.value = t[0]; k.readOnly = true;
+    var v = document.createElement("input");
+    v.type = "text"; v.value = t[1]; v.readOnly = true;
+    var del = document.createElement("button");
+    del.className = "row-del"; del.innerText = "×";
+    del.onclick = function () { NFT_TRAITS.splice(i, 1); renderTraits(); };
+    row.appendChild(k); row.appendChild(v); row.appendChild(del);
+    box.appendChild(row);
+  });
+  updateNftPreview();
+}
+
+$("n-trait-add").onclick = function () {
+  var t = $("n-trait-type").value.trim();
+  var v = $("n-trait-value").value.trim();
+  if (!t || !v) { toast("both trait and value needed"); return; }
+  if (NFT_TRAITS.length >= 12) { toast("12 traits maximum"); return; }
+  NFT_TRAITS.push([t, v]);
+  $("n-trait-type").value = ""; $("n-trait-value").value = "";
+  renderTraits();
+};
+
+function nftMeta(artPlaceholder) {
+  var meta = {
+    name: $("n-name").value.trim() || "Untitled",
+    description: $("n-desc").value.trim(),
+    url: artPlaceholder !== undefined ? artPlaceholder
+        : "<artimage>" + NFT_ART + "</artimage>"
+  };
+  var owner = $("n-owner").value.trim();
+  var ext = $("n-external").value.trim();
+  var web = $("n-webvalidate").value.trim();
+  if (owner) { meta.owner = owner; }
+  if (ext) { meta.external_url = ext; }
+  if (web) { meta.webvalidate = web; }
+  if (NFT_TRAITS.length) {
+    meta.attributes = NFT_TRAITS.map(function (t) {
+      return { trait_type: t[0], value: t[1] };
+    });
+  }
+  meta.nft = "true";
+  return meta;
+}
+
+function updateNftPreview() {
+  if (!$("n-preview")) { return; }
+  var ph = NFT_ART ? "<artimage>" + NFT_ART.length + " chars</artimage>" : "<artimage>…</artimage>";
+  $("n-preview").innerText = JSON.stringify(nftMeta(ph), null, 2);
+}
+
+["n-name", "n-desc", "n-owner", "n-external", "n-webvalidate", "n-editions"]
+  .forEach(function (id) { $(id).addEventListener("input", updateNftPreview); });
+$("nft-art-file").onchange = function () { nftArtPicked(this.files[0]); this.value = ""; };
+
+$("nft-mint-btn").onclick = function () {
+  var name = $("n-name").value.trim();
+  var editions = parseInt($("n-editions").value, 10) || 1;
+  var status = $("nft-status");
+  if (!name) { status.innerText = "a title is required"; return; }
+  if (!NFT_ART) { status.innerText = "choose the artwork first"; return; }
+  if (editions < 1 || editions > 1000) { status.innerText = "editions must be 1–1000"; return; }
+  if (!validCmdUrl($("n-external").value.trim()) || !validCmdUrl($("n-webvalidate").value.trim())) {
+    status.innerText = "URLs must not contain spaces, quotes or semicolons"; return;
+  }
+  status.innerText = "sealing…";
+  var web = $("n-webvalidate").value.trim();
+  function post(signPk) {
+    var cmd = "tokencreate name:" + JSON.stringify(nftMeta()) +
+              " amount:" + editions + " decimals:0";
+    if (web) { cmd += " webvalidate:" + web; }
+    if (signPk) { cmd += " signtoken:" + signPk; }
+    MDS.cmd(cmd, function (res) {
+      if (!res.status) {
+        status.innerText = "mint failed: " + (res.error || "node refused");
+        return;
+      }
+      status.innerText = "";
+      toast("NFT sealed — appears in the catalogue once confirmed");
+      NFT_ART = ""; NFT_TRAITS = [];
+      $("n-name").value = ""; $("n-desc").value = ""; $("n-external").value = "";
+      $("n-webvalidate").value = ""; $("n-editions").value = "1";
+      $("nft-art-drop").classList.remove("filled");
+      $("nft-art-drop").style.backgroundImage = "";
+      $("nft-art-hint").innerText = "+ choose artwork";
+      renderTraits();
+      studioShow("hub");
+    });
+  }
+  if ($("n-sign").checked) {
+    MDS.cmd("getaddress", function (res) {
+      post(res.status && res.response ? res.response.publickey : "");
+    });
+  } else { post(""); }
+};
+
+/* ---------- custom token ---------- */
+
+function renderPairs() {
+  var box = $("t-pairs");
+  box.innerHTML = "";
+  TOKEN_PAIRS.forEach(function (p, i) {
+    var row = document.createElement("div");
+    row.className = "pair-row";
+    var k = document.createElement("input");
+    k.type = "text"; k.value = p[0]; k.readOnly = true;
+    var v = document.createElement("input");
+    v.type = "text"; v.value = p[1]; v.readOnly = true;
+    var del = document.createElement("button");
+    del.className = "row-del"; del.innerText = "×";
+    del.onclick = function () { TOKEN_PAIRS.splice(i, 1); renderPairs(); };
+    row.appendChild(k); row.appendChild(v); row.appendChild(del);
+    box.appendChild(row);
+  });
+  updateTokenPreview();
+}
+
+$("t-pair-add").onclick = function () {
+  var k = $("t-pair-key").value.trim();
+  var v = $("t-pair-value").value.trim();
+  if (!k || !v) { toast("both field and value needed"); return; }
+  if (RESERVED_KEYS.indexOf(k.toLowerCase()) >= 0) { toast("'" + k + "' is a reserved field"); return; }
+  if (TOKEN_PAIRS.length >= 10) { toast("10 custom fields maximum"); return; }
+  TOKEN_PAIRS.push([k, v]);
+  $("t-pair-key").value = ""; $("t-pair-value").value = "";
+  renderPairs();
+};
+
+$("t-icon-file").onchange = function () {
+  var f = this.files[0];
+  this.value = "";
+  if (!f) { return; }
+  compressImage(f, ICON_BUDGET, function (b64) {
+    if (!b64) { toast("could not fit that image into an icon"); return; }
+    TOKEN_ICON = b64;
+    $("t-icon-slot").style.backgroundImage = "url(\"" + cssUrl(b64src(b64)) + "\")";
+    $("t-icon-glyph").innerText = "";
+    updateTokenPreview();
+  });
+};
+
+function tokenIconValue(placeholder) {
+  var url = $("t-iconurl").value.trim();
+  if (url) { return url; }
+  if (TOKEN_ICON) {
+    return placeholder ? "<artimage>" + TOKEN_ICON.length + " chars" : "<artimage>" + TOKEN_ICON;
+  }
+  return "";
+}
+
+function tokenMeta(placeholder) {
+  var meta = { name: $("t-name").value.trim() || "Unnamed" };
+  var desc = $("t-desc").value.trim();
+  var tick = $("t-ticker").value.trim();
+  var icon = tokenIconValue(placeholder);
+  if (desc) { meta.description = desc; }
+  if (tick) { meta.ticker = tick; }
+  if (icon) { meta.url = icon; }
+  TOKEN_PAIRS.forEach(function (p) {
+    if (RESERVED_KEYS.indexOf(p[0].toLowerCase()) < 0) { meta[p[0]] = p[1]; }
+  });
+  return meta;
+}
+
+function updateTokenPreview() {
+  if (!$("t-preview")) { return; }
+  $("t-preview").innerText = JSON.stringify(tokenMeta(true), null, 2);
+}
+
+["t-name", "t-ticker", "t-supply", "t-decimals", "t-desc", "t-iconurl"]
+  .forEach(function (id) { $(id).addEventListener("input", updateTokenPreview); });
+
+$("token-mint-btn").onclick = function () {
+  var status = $("token-status");
+  var name = $("t-name").value.trim();
+  var supply = parseInt($("t-supply").value, 10) || 0;
+  var dec = parseInt($("t-decimals").value, 10) || 0;
+  if (!name) { status.innerText = "a name is required"; return; }
+  if (supply < 1) { status.innerText = "supply must be a positive whole number"; return; }
+  if (dec < 0 || dec > 16) { status.innerText = "decimals must be 0–16"; return; }
+  if (!validCmdUrl($("t-iconurl").value.trim())) {
+    status.innerText = "icon URL must not contain spaces, quotes or semicolons"; return;
+  }
+  status.innerText = "minting…";
+  MDS.cmd("tokencreate name:" + JSON.stringify(tokenMeta(false)) +
+          " amount:" + supply + " decimals:" + dec, function (res) {
+    if (!res.status) {
+      status.innerText = "mint failed: " + (res.error || "node refused");
+      return;
+    }
+    status.innerText = "";
+    toast("token minted — appears in the catalogue once confirmed");
+    TOKEN_ICON = ""; TOKEN_PAIRS = [];
+    $("t-name").value = ""; $("t-ticker").value = ""; $("t-desc").value = "";
+    $("t-iconurl").value = ""; $("t-supply").value = "1000000"; $("t-decimals").value = "0";
+    $("t-icon-slot").style.backgroundImage = "";
+    $("t-icon-glyph").innerText = "+";
+    renderPairs();
+    studioShow("hub");
+  });
+};
+
+/* ---------- singles & tokens catalogue ---------- */
+
+function loadSingles() {
+  MDS.cmd("balance", function (res) {
+    if (!res.status) { return; }
+    var bal = res.response || [];
+    var singles = [], tokens = [];
+    for (var i = 0; i < bal.length; i++) {
+      var row = bal[i];
+      if (row.tokenid === "0x00") { continue; }
+      var t = row.token;
+      if (typeof t !== "object" || !t) { tokens.push(row); continue; }
+      var m = (t.name && typeof t.name === "object") ? t.name : t;
+      // StateNFT collections live in the collections grid, not here
+      if (m.mode && m.size) { continue; }
+      var total = parseInt(row.total, 10) || 0;
+      var isNft = m.nft === "true" ||
+        (m.url && total > 0 && total <= 100 && !m.ticker);
+      if (isNft) { singles.push(row); } else { tokens.push(row); }
+    }
+    var sBox = $("singles-list"); sBox.innerHTML = "";
+    $("singles-head").classList.toggle("hidden", singles.length === 0);
+    $("singles-count").innerText = singles.length || "";
+    singles.forEach(function (row) { sBox.appendChild(singleCard(row)); });
+    var tBox = $("tokens-list"); tBox.innerHTML = "";
+    $("tokens-head").classList.toggle("hidden", tokens.length === 0);
+    $("tokens-count").innerText = tokens.length || "";
+    tokens.forEach(function (row) { tBox.appendChild(tokenRowEl(row)); });
+  });
+}
+
+function singleCard(row) {
+  var m = (row.token && typeof row.token === "object")
+    ? ((row.token.name && typeof row.token.name === "object") ? row.token.name : row.token)
+    : {};
+  var el = document.createElement("div");
+  el.className = "nft-card";
+  el.innerHTML =
+    "<img class='nft-img' alt=''/>" +
+    "<div class='nft-body'><div class='nft-no'></div><div class='cc-name'></div>" +
+    "<div class='cc-sub'></div></div>";
+  var img = el.querySelector("img");
+  img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
+  img.src = iconSrc(m.url || "") || placeholderSVG(1);
+  el.querySelector(".nft-no").textContent = "ed. " + (row.total || "1");
+  el.querySelector(".cc-name").textContent = m.name || "NFT";
+  el.querySelector(".cc-sub").textContent = shortHash(row.tokenid);
+  el.onclick = function () { copyText(row.tokenid, null); };
+  return el;
+}
+
+function tokenRowEl(row) {
+  var t = row.token;
+  var m = (t && typeof t === "object") ? ((t.name && typeof t.name === "object") ? t.name : t) : {};
+  var name = (typeof t === "string") ? t : (m.name || "Token");
+  var el = document.createElement("div");
+  el.className = "token-row";
+  el.innerHTML =
+    "<img alt=''/><div class='tr-copy'><div class='tr-name'></div>" +
+    "<div class='tr-sub'></div></div><span class='chip-hash'>id</span>";
+  var img = el.querySelector("img");
+  img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
+  img.src = iconSrc(m.url || "") || placeholderSVG(1);
+  el.querySelector(".tr-name").textContent =
+    name + (m.ticker ? " · " + m.ticker.toUpperCase() : "");
+  el.querySelector(".tr-sub").textContent =
+    "supply " + (row.total || "?") + " · " + shortHash(row.tokenid);
+  el.querySelector(".chip-hash").onclick = function () { copyText(row.tokenid, this); };
+  return el;
+}
+
+loadSingles();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>StateNFT Suite</title>
+<title>Atelier</title>
 <link rel="stylesheet" href="styles.css?v=352">
 <script type="text/javascript" src="mds.js?v=352"></script>
 <script type="text/javascript" src="sanitize.js?v=352"></script>
@@ -15,14 +15,14 @@
 <header class="masthead">
   <div class="mast-row">
     <div>
-      <p class="masthead-kicker">Minima &middot; One TokenID &middot; Many Faces</p>
-      <h1 class="wordmark">STATENFT</h1>
+      <p class="masthead-kicker">The Minima NFT studio &middot; every mint a numbered lot</p>
+      <h1 class="wordmark">ATELIER</h1>
     </div>
     <span id="block-info" class="block-chip">block &mdash;</span>
   </div>
   <nav class="nav">
-    <button id="tab-collections" class="tab tab-active">Collections</button>
-    <button id="tab-create" class="tab">Create</button>
+    <button id="tab-collections" class="tab tab-active">Catalogue</button>
+    <button id="tab-create" class="tab">Studio</button>
   </nav>
 </header>
 
@@ -39,13 +39,150 @@
     <div id="collection-list" class="collection-list"></div>
     <div id="collections-empty" class="empty-state hidden">
       <p class="empty-glyph">&#9670;</p>
-      <p>Nothing on view &mdash; create a collection, or open one by tokenid.</p>
+      <p>Nothing on view &mdash; create in the Studio, or open a collection by tokenid.</p>
     </div>
+
+    <div id="singles-head" class="section-head hidden">
+      <h2>Single NFTs</h2><span id="singles-count" class="mono"></span>
+    </div>
+    <div id="singles-list" class="singles-grid"></div>
+
+    <div id="tokens-head" class="section-head hidden">
+      <h2>Tokens</h2><span id="tokens-count" class="mono"></span>
+    </div>
+    <div id="tokens-list"></div>
   </section>
 
-  <!-- ============ CREATE ============ -->
+  <!-- ============ STUDIO ============ -->
   <section id="view-create" class="hidden">
+
+    <!-- studio hub -->
+    <div id="studio-hub" class="studio-grid">
+      <div class="studio-card" id="hub-collection">
+        <p class="wizard-kick">&numero; 1 &middot; Engine</p>
+        <h3>StateNFT Collection</h3>
+        <p>2&ndash;20 editions sharing one tokenid &mdash; sealed per-coin identities,
+           resumable mint engine, locked contract.</p>
+      </div>
+      <div class="studio-card" id="hub-nft">
+        <p class="wizard-kick">&numero; 2</p>
+        <h3>Single NFT</h3>
+        <p>A classic Minima NFT &mdash; 1/1 or small edition, with traits.
+           Renders in every wallet.</p>
+      </div>
+      <div class="studio-card" id="hub-token">
+        <p class="wizard-kick">&numero; 3</p>
+        <h3>Custom Token</h3>
+        <p>A fungible token &mdash; name, ticker, supply, decimals, icon.</p>
+      </div>
+    </div>
+
+    <!-- № 2 · single NFT wizard -->
+    <div id="wiz-nft" class="wizard hidden">
+      <p class="wizard-kick">&numero; 2 &middot; Single NFT</p>
+      <h2 class="wizard-title">Seal an NFT</h2>
+      <span class="flabel">Artwork &mdash; tap to choose (image or SVG)</span>
+      <label class="art-drop" id="nft-art-drop">
+        <span id="nft-art-hint">+ choose artwork</span>
+        <input type="file" accept="image/*,.svg" class="slot-input" id="nft-art-file"/>
+      </label>
+      <div class="field-grid" style="margin-top:1rem">
+        <label>Title
+          <input id="n-name" type="text" maxlength="64" placeholder="Nocturne 04" />
+        </label>
+        <label>Editions
+          <input id="n-editions" type="number" min="1" max="1000" value="1" />
+        </label>
+        <label class="field-wide">Description
+          <input id="n-desc" type="text" maxlength="256" placeholder="optional" />
+        </label>
+        <label>Artist / owner
+          <input id="n-owner" type="text" maxlength="64" placeholder="your name in the record" />
+        </label>
+        <label>External URL
+          <input id="n-external" type="text" maxlength="512" placeholder="optional https://&hellip;" />
+        </label>
+        <label class="field-wide">Web validation URL
+          <input id="n-webvalidate" type="text" maxlength="512" placeholder="optional https://&hellip;/proof.txt" />
+        </label>
+      </div>
+      <div class="mode-row">
+        <span class="flabel">Traits</span>
+        <div id="n-traits"></div>
+        <div class="trait-row">
+          <input id="n-trait-type" type="text" placeholder="Trait — e.g. District" />
+          <input id="n-trait-value" type="text" placeholder="Value — e.g. Rive Gauche" />
+          <button id="n-trait-add" class="btn btn-ghost">+</button>
+        </div>
+      </div>
+      <label class="radio" style="margin-top:1rem">
+        <input type="checkbox" id="n-sign" checked />
+        <span>Sign as creator (provable authorship)</span>
+      </label>
+      <span class="flabel" style="margin-top:1rem">The record before the seal</span>
+      <pre id="n-preview" class="meta-pre">&mdash;</pre>
+      <div class="wizard-actions">
+        <button id="nft-hub-back" class="btn btn-ghost">&larr; Studio</button>
+        <button id="nft-mint-btn" class="btn btn-gold">Seal this NFT</button>
+      </div>
+      <p id="nft-status" class="modal-status"></p>
+    </div>
+
+    <!-- № 3 · custom token wizard -->
+    <div id="wiz-token" class="wizard hidden">
+      <p class="wizard-kick">&numero; 3 &middot; Custom Token</p>
+      <h2 class="wizard-title">Mint a Token</h2>
+      <div class="field-grid">
+        <label>Name
+          <input id="t-name" type="text" maxlength="64" placeholder="EuroBuddha Coin" />
+        </label>
+        <label>Ticker
+          <input id="t-ticker" type="text" maxlength="12" placeholder="EUROB" />
+        </label>
+        <label>Total supply
+          <input id="t-supply" type="number" min="1" value="1000000" />
+        </label>
+        <label>Decimals (0&ndash;16)
+          <input id="t-decimals" type="number" min="0" max="16" value="0" />
+        </label>
+        <label class="field-wide">Description
+          <input id="t-desc" type="text" maxlength="256" placeholder="optional" />
+        </label>
+      </div>
+      <div class="mode-row">
+        <span class="flabel">Wallet icon</span>
+        <div class="icon-row">
+          <input id="t-iconurl" type="text" placeholder="hosted image URL (https://...) — beats an upload" />
+          <label class="icon-slot" id="t-icon-slot" title="or upload — embedded on-chain, always static">
+            <span id="t-icon-glyph">+</span>
+            <input type="file" accept="image/*" class="slot-input" id="t-icon-file"/>
+          </label>
+        </div>
+      </div>
+      <div class="mode-row">
+        <span class="flabel">Custom record fields</span>
+        <div id="t-pairs"></div>
+        <div class="pair-row">
+          <input id="t-pair-key" type="text" placeholder="Field — e.g. website" />
+          <input id="t-pair-value" type="text" placeholder="Value" />
+          <button id="t-pair-add" class="btn btn-ghost">+</button>
+        </div>
+      </div>
+      <p class="bury-warn" style="margin-top:1rem">SUPPLY IS PERMANENT &mdash; total
+        supply and decimals cannot be changed after minting.</p>
+      <span class="flabel" style="margin-top:1rem">The record</span>
+      <pre id="t-preview" class="meta-pre">&mdash;</pre>
+      <div class="wizard-actions">
+        <button id="token-hub-back" class="btn btn-ghost">&larr; Studio</button>
+        <button id="token-mint-btn" class="btn btn-gold">Mint token</button>
+      </div>
+      <p id="token-status" class="modal-status"></p>
+    </div>
+
+    <!-- № 1 · collection wizard -->
+    <div id="wiz-collection" class="hidden">
     <div class="wizard">
+      <p class="wizard-kick">&numero; 1 &middot; StateNFT Collection</p>
       <h2 class="wizard-title">New Collection</h2>
 
       <div class="field-grid">
@@ -106,6 +243,7 @@
       </div>
 
       <div class="wizard-actions">
+        <button id="coll-hub-back" class="btn btn-ghost">&larr; Studio</button>
         <button id="mint-btn" class="btn btn-gold">Mint Collection</button>
       </div>
       <p class="cert-note" style="margin-top:0.8rem">Locked edition: every
@@ -114,6 +252,7 @@
         afterwards. Check your images carefully before minting.</p>
       <p id="create-status" class="modal-status"></p>
     </div>
+    </div><!-- /wiz-collection -->
   </section>
 
   <!-- ============ DETAIL : Catalogue Raisonné ============ -->
@@ -264,7 +403,7 @@
     <p class="insp-caption"><span id="insp-caption-no"></span></p>
   </div>
   <aside class="lot-sheet" id="lot-sheet">
-    <p class="mp-kicker">Private Viewing &middot; Lot</p>
+    <p class="mp-kicker">Atelier &middot; Lot</p>
     <p class="lot-no"><span id="lot-no" class="lot-serif">No. &mdash;</span>
       <span id="lot-of" class="lot-of"></span></p>
     <p class="lot-title"><span id="lot-coll"></span>
