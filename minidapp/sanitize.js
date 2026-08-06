@@ -34,8 +34,39 @@ function cssUrl(src) {
   if (!src) { return ""; }
   src = "" + src;
   if (/["\\\r\n]/.test(src)) { return ""; }
-  if (/^data:image\/(jpeg|png|gif|svg\+xml)[;,]/i.test(src)) { return src; }
+  if (/^data:image\/(jpeg|png|gif|webp|svg\+xml)[;,]/i.test(src)) { return src; }
   return safeUrl(src);
+}
+
+/* Decode the first few bytes of a base64 payload without atob/Buffer so this
+ * file works identically in the browser and the node test sandbox. */
+function b64Head(b64, n) {
+  var A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var out = [];
+  for (var i = 0; i + 3 < b64.length && out.length < n; i += 4) {
+    var c0 = A.indexOf(b64[i]), c1 = A.indexOf(b64[i + 1]);
+    var c2 = A.indexOf(b64[i + 2]), c3 = A.indexOf(b64[i + 3]);
+    if (c0 < 0 || c1 < 0) { break; }
+    out.push((c0 << 2) | (c1 >> 4));
+    if (c2 >= 0) { out.push(((c1 & 15) << 4) | (c2 >> 2)); }
+    if (c2 >= 0 && c3 >= 0) { out.push(((c2 & 3) << 6) | c3); }
+  }
+  return out;
+}
+
+/* Sniff a sealed b64 payload's mime from its magic bytes (WebP/JPEG/PNG/SVG). */
+function b64Mime(b64) {
+  var h = b64Head(b64, 16);
+  function ch(i) { return h[i] === undefined ? -1 : h[i]; }
+  if (ch(0) === 82 && ch(1) === 73 && ch(2) === 70 && ch(3) === 70 &&
+      ch(8) === 87 && ch(9) === 69 && ch(10) === 66 && ch(11) === 80) { return "image/webp"; }
+  if (ch(0) === 0xFF && ch(1) === 0xD8) { return "image/jpeg"; }
+  if (ch(0) === 0x89 && ch(1) === 80 && ch(2) === 78 && ch(3) === 71) { return "image/png"; }
+  var text = "";
+  for (var i = 0; i < h.length; i++) { text += String.fromCharCode(h[i]); }
+  text = text.replace(/^\s+/, "").toLowerCase();
+  if (text.indexOf("<svg") === 0 || text.indexOf("<?xml") === 0) { return "image/svg+xml"; }
+  return "image/jpeg";
 }
 
 /* Wallet icon from token metadata: either a hosted http(s) URL or the
@@ -47,7 +78,7 @@ function iconSrc(icon) {
     ? ("" + icon).substring(10) : ("" + icon);
   var hosted = safeUrl(raw);
   if (hosted) { return hosted; }
-  if (/^[A-Za-z0-9+/=]+$/.test(raw)) { return "data:image/jpeg;base64," + raw; }
+  if (/^[A-Za-z0-9+/=]+$/.test(raw)) { return "data:" + b64Mime(raw) + ";base64," + raw; }
   return null;
 }
 

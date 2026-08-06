@@ -4,10 +4,25 @@
  */
 
 /* Transfers carry an embedded image TWICE (input coin proof + recreated
- * output state), so item images stay <= 8000 b64 chars; wallet icons ride in
- * token metadata (proven cheap) at <= 6000. */
-var IMG_BUDGET = 8000;
+ * output state); 16000 b64 chars proven by image-budget-spike.sh (stamp +
+ * transfer confirmed on-chain 2026-08-05, state intact). Wallet icons ride
+ * in token metadata (proven cheap) at <= 6000. */
+var IMG_BUDGET = 16000;
 var ICON_BUDGET = 6000;
+
+/* Correct data URI for a sealed b64 payload — sniffs the decoded magic bytes
+ * (WebP/JPEG/PNG/SVG) so plates render with an honest mime everywhere. */
+function b64src(b64) {
+  try {
+    var head = atob(String(b64).slice(0, 24));
+    if (head.slice(0, 4) === "RIFF" && head.slice(8, 12) === "WEBP") { return "data:image/webp;base64," + b64; }
+    if (head.charCodeAt(0) === 0xFF && head.charCodeAt(1) === 0xD8) { return "data:image/jpeg;base64," + b64; }
+    if (head.charCodeAt(0) === 0x89 && head.slice(1, 4) === "PNG") { return "data:image/png;base64," + b64; }
+    var t = head.replace(/^\s+/, "").toLowerCase();
+    if (t.indexOf("<svg") === 0 || t.indexOf("<?xml") === 0) { return "data:image/svg+xml;base64," + b64; }
+  } catch (e) {}
+  return "data:image/jpeg;base64," + b64;
+}
 
 var TOKENID = "";
 var META = null;          // metadata of the open collection
@@ -75,7 +90,7 @@ function coinImage(coin, idx) {
     // base64 characters, so it can never carry a different data: payload
     var b64 = p1.replace(/^\[/, "").replace(/\]$/, "");
     if (/^[A-Za-z0-9+/=]*$/.test(b64)) {
-      return "data:image/jpeg;base64," + b64;
+      return b64src(b64);
     }
     return placeholderSVG(idx);
   }
@@ -256,7 +271,7 @@ function setCover(coverEl, row) {
           " AND idx=1", function (r) {
     var img = (r.rows && r.rows.length) ? r.rows[0].IMAGE : "";
     if (img) {
-      apply(img.indexOf("http") === 0 ? img : "data:image/jpeg;base64," + img);
+      apply(img.indexOf("http") === 0 ? img : b64src(img));
       return;
     }
     // 2. url-mode derivable
@@ -270,8 +285,7 @@ function setCover(coverEl, row) {
         var cs = res.status ? res.response : [];
         for (var i = 0; i < cs.length; i++) {
           if (stateVar(cs[i], 0) === "1" && stateVar(cs[i], 1)) {
-            apply("data:image/jpeg;base64," +
-                  stateVar(cs[i], 1).replace(/^\[/, "").replace(/\]$/, ""));
+            apply(b64src(stateVar(cs[i], 1).replace(/^\[/, "").replace(/\]$/, "")));
             return;
           }
         }
@@ -884,7 +898,7 @@ function renderNeedImages() {
         slot.className = "image-slot";
         var img = NEED_IMAGES[idx];
         slot.innerHTML =
-          (img ? "<img src='data:image/jpeg;base64," + img + "'/>"
+          (img ? "<img src='" + b64src(img) + "'/>"
                : "<span class='slot-num'>" + idx + "</span><span class='slot-hint'>add image</span>") +
           "<input type='file' accept='image/*' class='slot-input'/>";
         slot.querySelector("input").onchange = function (e) {
@@ -1074,7 +1088,7 @@ function rebuildSlots() {
       slot.className = "image-slot";
       var img = WIZ_IMAGES[idx - 1];
       slot.innerHTML =
-        (img ? "<img src='data:image/jpeg;base64," + img + "'/>"
+        (img ? "<img src='" + b64src(img) + "'/>"
              : "<span class='slot-num'>" + idx + "</span><span class='slot-hint'>add image</span>") +
         "<input type='file' accept='image/*' class='slot-input'/>";
       slot.querySelector("input").onchange = function (e) {
@@ -1096,21 +1110,27 @@ function compressImage(file, budget, cb) {
   reader.onload = function () {
     var img = new Image();
     img.onload = function () {
-      var dim = 400, q = 0.8;
-      function attempt() {
+      // WebP-first (falls back to JPEG when the browser can't encode it),
+      // largest dim that fits the budget wins — matches the Android encoder.
+      var dims = [1080, 900, 720, 560, 420, 300];
+      var quals = [0.88, 0.78, 0.68, 0.6];
+      function encodeAt(dim, q) {
         var cv = document.createElement("canvas");
         var scale = Math.min(1, dim / Math.max(img.width, img.height));
         cv.width = Math.max(1, Math.round(img.width * scale));
         cv.height = Math.max(1, Math.round(img.height * scale));
         cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-        var b64 = cv.toDataURL("image/jpeg", q).split(",")[1];
-        if (b64.length <= budget) { cb(b64); return; }
-        if (q > 0.45) { q -= 0.15; }
-        else if (dim > 100) { dim = Math.round(dim * 0.75); q = 0.8; }
-        else { cb(""); return; }
-        attempt();
+        var url = cv.toDataURL("image/webp", q);
+        if (url.indexOf("data:image/webp") !== 0) { url = cv.toDataURL("image/jpeg", q); }
+        return url.split(",")[1];
       }
-      attempt();
+      for (var d = 0; d < dims.length; d++) {
+        for (var i = 0; i < quals.length; i++) {
+          var b64 = encodeAt(dims[d], quals[i]);
+          if (b64.length <= budget) { cb(b64); return; }
+        }
+      }
+      cb("");
     };
     img.onerror = function () { cb(null); };
     img.src = reader.result;
@@ -1352,7 +1372,7 @@ function onIconPick(e) {
     if (!b64) { toast("could not process icon"); return; }
     WIZ_ICON = b64;
     $("icon-slot").innerHTML =
-      "<img src='data:image/jpeg;base64," + b64 + "'/>" +
+      "<img src='" + b64src(b64) + "'/>" +
       "<input type='file' accept='image/*' class='slot-input' id='icon-file'/>";
     $("icon-file").onchange = onIconPick;
   });

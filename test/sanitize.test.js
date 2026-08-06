@@ -80,6 +80,10 @@ rejects(iconSrc, "empty", "");
 
 console.log("iconSrc — real values accepted");
 check("hosted animated gif", iconSrc(REAL.animatedIcon), REAL.animatedIcon);
+check("raw webp b64 gets an honest webp mime",
+  iconSrc("UklGRj8/Pz9XRUJQVlA4"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
+check("webp data URI allowed in cssUrl",
+  cssUrl("data:image/webp;base64,UklGRg=="), "data:image/webp;base64,UklGRg==");
 accepts(iconSrc, "<artimage> base64 icon", REAL.artimageIcon);
 check("artimage decodes to a jpeg data URI",
   iconSrc(REAL.artimageIcon).indexOf("data:image/jpeg;base64,") === 0, true);
