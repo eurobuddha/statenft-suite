@@ -90,6 +90,62 @@ public final class ImageTools {
         return rotateBase64(b64, 0, budget);
     }
 
+    /* ---- wallet icons: ALWAYS square. Wallet tiles are square; a portrait
+     * plate dropped in raw gets letterboxed into an ugly sliver. Center-crop
+     * cover, like every proper token icon. ---- */
+
+    public static String iconFromUri(Context c, Uri uri, int budget) {
+        try {
+            ImageDecoder.Source src = ImageDecoder.createSource(c.getContentResolver(), uri);
+            Bitmap bmp = ImageDecoder.decodeBitmap(src, (d, info, s) -> {
+                d.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight();
+                int max = Math.max(w, h);
+                if (max > 1024) {
+                    float f = 1024f / max;
+                    d.setTargetSize(Math.max(1, Math.round(w * f)), Math.max(1, Math.round(h * f)));
+                }
+            });
+            if (bmp == null) return "";
+            return compressIconBitmap(centerSquare(bmp), budget);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    public static String iconFromBase64(String b64, int budget) {
+        if (b64 == null || b64.isEmpty()) return "";
+        try {
+            byte[] raw = Base64.decode(b64, Base64.DEFAULT);
+            Bitmap src = BitmapFactory.decodeByteArray(raw, 0, raw.length);
+            if (src == null) return "";
+            return compressIconBitmap(centerSquare(src), budget);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static Bitmap centerSquare(Bitmap src) {
+        int side = Math.min(src.getWidth(), src.getHeight());
+        int x = (src.getWidth() - side) / 2;
+        int y = (src.getHeight() - side) / 2;
+        return Bitmap.createBitmap(src, x, y, side, side);
+    }
+
+    private static String compressIconBitmap(Bitmap sq, int budget) {
+        int[] dims = {512, 400, 320, 240, 180};
+        for (int dim : dims) {
+            int side = Math.min(dim, sq.getWidth());
+            Bitmap scaled = Bitmap.createScaledBitmap(sq, side, side, true);
+            for (int quality = 88; quality >= 60; quality -= 10) {
+                String b64 = encode(scaled, quality);
+                if (!b64.isEmpty() && b64.length() <= budget) return b64;
+            }
+            if (scaled != sq) scaled.recycle();
+        }
+        return "";
+    }
+
     public static String rotateBase64(String b64, int degrees, int budget) {
         if (b64 == null || b64.isEmpty()) return "";
         try {

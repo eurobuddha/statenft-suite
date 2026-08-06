@@ -24,6 +24,48 @@ function b64src(b64) {
   return "data:image/jpeg;base64," + b64;
 }
 
+
+/* Wallet icons are ALWAYS square — wallet tiles are square, and a portrait
+ * plate dropped in raw letterboxes into an ugly sliver. Cover-crop center,
+ * <=512px, WebP with JPEG fallback, within ICON_BUDGET. */
+function squareIconFromImage(img) {
+  var side0 = Math.min(img.width, img.height);
+  var sx = (img.width - side0) / 2, sy = (img.height - side0) / 2;
+  var dims = [512, 400, 320, 240, 180];
+  var quals = [0.88, 0.78, 0.68, 0.6];
+  for (var d = 0; d < dims.length; d++) {
+    var side = Math.min(dims[d], side0) || dims[d];
+    var cv = document.createElement("canvas");
+    cv.width = side; cv.height = side;
+    cv.getContext("2d").drawImage(img, sx, sy, side0, side0, 0, 0, side, side);
+    for (var q = 0; q < quals.length; q++) {
+      var url = cv.toDataURL("image/webp", quals[q]);
+      if (url.indexOf("data:image/webp") !== 0) { url = cv.toDataURL("image/jpeg", quals[q]); }
+      var b64 = url.split(",")[1];
+      if (b64.length <= ICON_BUDGET) { return b64; }
+    }
+  }
+  return "";
+}
+
+function compressIconFile(file, cb) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var img = new Image();
+    img.onload = function () { cb(squareIconFromImage(img)); };
+    img.onerror = function () { cb(null); };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function squareIconFromB64(b64, cb) {
+  var img = new Image();
+  img.onload = function () { cb(squareIconFromImage(img)); };
+  img.onerror = function () { cb(""); };
+  img.src = b64src(b64);
+}
+
 var TOKENID = "";
 var META = null;          // metadata of the open collection
 var OPEN_ROW = null;      // SQL row when viewing a listed collection
@@ -1179,6 +1221,15 @@ function mintCollection() {
   }
 
   status.innerText = "preparing...";
+  function withIcon(next) {
+    if (icon || mode !== "embed" || !WIZ_IMAGES[0]) { next(); return; }
+    // no icon chosen: square-crop plate #1 so the wallet tile fills properly
+    squareIconFromB64(WIZ_IMAGES[0], function (sq) {
+      if (sq) { icon = sq; }
+      next();
+    });
+  }
+  withIcon(function () {
   MDS.cmd("getaddress", function (res) {
     if (!res.status) { status.innerText = "getaddress failed"; return; }
     var addr = res.response.address;
@@ -1225,6 +1276,7 @@ function mintCollection() {
         });
       });
   });
+  });   // withIcon
 }
 
 /* ---------- transfer (full-state preserving) ---------- */
@@ -1397,7 +1449,7 @@ Array.prototype.forEach.call(document.getElementsByName("c-mode"), function (r) 
 function onIconPick(e) {
   var f = e.target.files[0];
   if (!f) { return; }
-  compressImage(f, ICON_BUDGET, function (b64) {
+  compressIconFile(f, function (b64) {
     if (!b64) { toast("could not process icon"); return; }
     WIZ_ICON = b64;
     $("icon-slot").innerHTML =
@@ -1687,7 +1739,7 @@ $("t-icon-file").onchange = function () {
   var f = this.files[0];
   this.value = "";
   if (!f) { return; }
-  compressImage(f, ICON_BUDGET, function (b64) {
+  compressIconFile(f, function (b64) {
     if (!b64) { toast("could not fit that image into an icon"); return; }
     TOKEN_ICON = b64;
     $("t-icon-slot").style.backgroundImage = "url(\"" + cssUrl(b64src(b64)) + "\")";

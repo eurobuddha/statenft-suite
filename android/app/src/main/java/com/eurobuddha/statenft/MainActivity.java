@@ -1437,7 +1437,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         : leadImg.isEmpty() ? ""
                         : "image/svg+xml".equals(ImageTools.mimeOf(leadImg))
                             ? (leadImg.length() <= ImageTools.ICON_BUDGET ? leadImg : "")
-                            : ImageTools.recompressBase64(leadImg, ImageTools.ICON_BUDGET);
+                            // slot-1 fallback: square-crop so the wallet tile fills edge-to-edge
+                            : ImageTools.iconFromBase64(leadImg, ImageTools.ICON_BUDGET);
                 m.externalUrl = exF;
                 m.webvalidate = wF;
                 m.creatorAddr = r.optString("address");
@@ -2706,6 +2707,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 try {
                     // SVG lane: sanitize + seal as text, skip the raster pipeline
                     if (ImageTools.isSvgUri(this, uri)) out.add(ImageTools.svgBase64FromUri(this, uri, budget));
+                    // wallet icons are square-cropped so wallet tiles fill edge-to-edge
+                    else if (context == PICK_TOKICON || context == PICK_COLLICON) out.add(ImageTools.iconFromUri(this, uri, budget));
                     else out.add(ImageTools.compressUri(this, uri, budget));
                 } catch (Exception ignored) { out.add(""); }
             }
