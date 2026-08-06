@@ -43,6 +43,8 @@ public final class StateNft {
         public int owned = 0;
         public int minted = 0;
         public int totalSeen = 0;
+        public JSONObject itemTraits = null;   // collection metadata: {"1":[{trait_type,value}], …}
+        public JSONArray attributes = null;    // single-NFT metadata attributes array
     }
 
     public static class Item {
@@ -89,6 +91,8 @@ public final class StateNft {
             m.icon = first(src.optString("url", ""), root.optString("url", ""), src.optString("icon", ""), root.optString("icon", ""));
             m.externalUrl = first(src.optString("external_url", ""), root.optString("external_url", ""));
             m.webvalidate = first(src.optString("webvalidate", ""), root.optString("webvalidate", ""));
+            m.itemTraits = src.optJSONObject("traits") != null ? src.optJSONObject("traits") : root.optJSONObject("traits");
+            m.attributes = src.optJSONArray("attributes") != null ? src.optJSONArray("attributes") : root.optJSONArray("attributes");
         } else if (tokenNode instanceof String) {
             m.name = (String) tokenNode;
         }
@@ -181,7 +185,7 @@ public final class StateNft {
     public static String imageUrl(Meta meta, int idx, JSONObject coin) {
         String embedded = state(coin, 1);
         if (embedded != null && embedded.startsWith("[") && embedded.endsWith("]")) {
-            return "data:image/jpeg;base64," + embedded.substring(1, embedded.length() - 1);
+            return ImageTools.dataUri(embedded.substring(1, embedded.length() - 1));
         }
         if (meta != null && !meta.base.isEmpty()) return meta.base + idx + (meta.ext == null ? "" : meta.ext);
         return IconResolver.resolve(meta == null ? "" : meta.icon);
@@ -221,9 +225,10 @@ public final class StateNft {
         return out;
     }
 
+    /* Build+sign steps for MintEngine.postTxn, which wraps them in
+     * txncreate -> txncheck (balanced) -> signs -> txnbasics -> txnpost. */
     public static List<String> transferCommands(String txn, String tokenid, JSONObject coin, String to) {
         List<String> cmds = new ArrayList<>();
-        cmds.add("txncreate id:" + txn);
         cmds.add("txninput id:" + txn + " coinid:" + coin.optString("coinid"));
         cmds.add("txnoutput id:" + txn + " amount:1 address:" + to + " tokenid:" + tokenid + " storestate:true");
         JSONArray st = coin.optJSONArray("state");
@@ -234,14 +239,11 @@ public final class StateNft {
             }
         }
         cmds.add("txnsign id:" + txn + " publickey:auto");
-        cmds.add("txnbasics id:" + txn);
-        cmds.add("txnpost id:" + txn);
         return cmds;
     }
 
     public static List<String> buryCommands(String txn, String tokenid, String creatorPk, JSONObject coin, boolean preserve) {
         List<String> cmds = new ArrayList<>();
-        cmds.add("txncreate id:" + txn);
         cmds.add("txninput id:" + txn + " coinid:" + coin.optString("coinid"));
         cmds.add("txnoutput id:" + txn + " amount:" + coin.optString("tokenamount", "1")
                 + " address:" + GRAVEYARD + " tokenid:" + tokenid + " storestate:" + (preserve ? "true" : "false"));
@@ -258,9 +260,80 @@ public final class StateNft {
         if (!creatorPk.isEmpty() && (!preserve || stamped(coin) == null)) {
             cmds.add("txnsign id:" + txn + " publickey:" + creatorPk);
         }
-        cmds.add("txnbasics id:" + txn);
-        cmds.add("txnpost id:" + txn);
         return cmds;
+    }
+
+    /** Wallet-standard single-NFT metadata (NFTwallet-compatible), with an
+     *  OpenSea-style attributes array when traits are supplied. */
+    public static JSONObject nftMetadata(String name, String desc, String url, String owner,
+                                         String externalUrl, String webvalidate, JSONArray attributes) {
+        JSONObject meta = new JSONObject();
+        put(meta, "name", name);
+        put(meta, "description", desc == null ? "" : desc);
+        put(meta, "url", url);
+        if (owner != null && !owner.isEmpty()) put(meta, "owner", owner);
+        if (externalUrl != null && !externalUrl.isEmpty()) put(meta, "external_url", externalUrl);
+        if (webvalidate != null && !webvalidate.isEmpty()) put(meta, "webvalidate", webvalidate);
+        if (attributes != null && attributes.length() > 0) put(meta, "attributes", attributes);
+        put(meta, "nft", "true");
+        return meta;
+    }
+
+    public static String nftCreateCommand(String name, String desc, String url, String owner,
+                                          String externalUrl, String webvalidate, JSONArray attributes,
+                                          int editions, String signPk) {
+        JSONObject meta = nftMetadata(name, desc, url, owner, externalUrl, webvalidate, attributes);
+        String cmd = "tokencreate name:" + meta + " amount:" + editions + " decimals:0";
+        if (webvalidate != null && !webvalidate.isEmpty()) cmd += " webvalidate:" + webvalidate;
+        if (signPk != null && !signPk.isEmpty()) cmd += " signtoken:" + signPk;
+        return cmd;
+    }
+
+    public static JSONArray traitsToAttributes(java.util.List<String[]> traits) {
+        JSONArray arr = new JSONArray();
+        if (traits == null) return arr;
+        for (String[] t : traits) {
+            if (t == null || t.length < 2 || t[0].trim().isEmpty() || t[1].trim().isEmpty()) continue;
+            JSONObject a = new JSONObject();
+            put(a, "trait_type", t[0].trim());
+            put(a, "value", t[1].trim());
+            arr.put(a);
+        }
+        return arr;
+    }
+
+    /** Keys a custom token pair must never overwrite (matches NFTwallet). */
+    public static final java.util.Set<String> RESERVED_KEYS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "name", "url", "description", "ticker", "webvalidate", "external_url", "owner", "nft", "icon", "attributes"));
+
+    public static JSONObject tokenMeta(String name, String desc, String ticker, String url,
+                                       java.util.List<String[]> pairs) {
+        JSONObject meta = new JSONObject();
+        put(meta, "name", name);
+        if (desc != null && !desc.isEmpty()) put(meta, "description", desc);
+        if (ticker != null && !ticker.isEmpty()) put(meta, "ticker", ticker);
+        if (url != null && !url.isEmpty()) put(meta, "url", url);
+        if (pairs != null) {
+            for (String[] p : pairs) {
+                if (p == null || p.length < 2) continue;
+                String k = p[0].trim(), v = p[1].trim();
+                if (k.isEmpty() || v.isEmpty() || RESERVED_KEYS.contains(k.toLowerCase())) continue;
+                put(meta, k, v);
+            }
+        }
+        return meta;
+    }
+
+    /** Fungible token mint. */
+    public static String tokenCreateCommand(String name, String desc, String ticker, String url,
+                                            long supply, int decimals) {
+        return tokenCreateCommand(name, desc, ticker, url, supply, decimals, null);
+    }
+
+    public static String tokenCreateCommand(String name, String desc, String ticker, String url,
+                                            long supply, int decimals, java.util.List<String[]> pairs) {
+        return "tokencreate name:" + tokenMeta(name, desc, ticker, url, pairs)
+                + " amount:" + supply + " decimals:" + decimals;
     }
 
     private static String first(String... vals) {

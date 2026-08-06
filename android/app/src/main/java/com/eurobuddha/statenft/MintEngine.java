@@ -24,28 +24,35 @@ public final class MintEngine {
                 int tip = block.optJSONObject("response") == null ? 0 : block.optJSONObject("response").optInt("block", 0);
                 LocalStore.prunePending(ctx, tip);
                 JSONArray rows = LocalStore.load(ctx);
-                tickRow(ctx, node, rows, 0, tip, done);
+                tickRow(ctx, node, rows, 0, tip, false, done);
             }
             @Override public void fail(String e) { done.done("Mint tick failed: " + e); }
         });
     }
 
-    private static void tickRow(Context ctx, NodeApi node, JSONArray rows, int i, int tip, Done done) {
-        if (i >= rows.length()) { done.done("Mint engine idle"); return; }
-        JSONObject row = rows.optJSONObject(i);
-        if (row == null) { tickRow(ctx, node, rows, i + 1, tip, done); return; }
-        String phase = row.optString("phase", "DONE");
-        if ("DONE".equals(phase) || "BURIED".equals(phase)) {
-            tickRow(ctx, node, rows, i + 1, tip, done);
+    // Every active row advances one step per tick; an errored or waiting row
+    // must never starve the ones after it (matches engine.js engineTick).
+    private static void tickRow(Context ctx, NodeApi node, JSONArray rows, int i, int tip, boolean acted, Done done) {
+        if (i >= rows.length()) {
+            if (!acted) done.done("Mint engine idle");
             return;
         }
-        if ("CREATE".equals(phase)) phaseCreate(ctx, node, row, tip, done);
-        else if ("MOVE".equals(phase)) phaseMove(ctx, node, row, tip, done);
-        else if ("SPLIT".equals(phase)) phaseSplit(ctx, node, row, tip, done);
-        else if ("STAMP".equals(phase)) phaseStamp(ctx, node, row, tip, done);
-        else if ("NEEDIMAGES".equals(phase)) phaseNeedImages(ctx, node, row, done);
-        else if ("BURY".equals(phase)) done.done("Bury is handled from the Bury screen");
-        else tickRow(ctx, node, rows, i + 1, tip, done);
+        JSONObject row = rows.optJSONObject(i);
+        String phase = row == null ? "DONE" : row.optString("phase", "DONE");
+        if (row == null || "DONE".equals(phase) || "BURIED".equals(phase) || "BURY".equals(phase)) {
+            tickRow(ctx, node, rows, i + 1, tip, acted, done);
+            return;
+        }
+        Done next = msg -> {
+            done.done(msg);
+            tickRow(ctx, node, rows, i + 1, tip, true, done);
+        };
+        if ("CREATE".equals(phase)) phaseCreate(ctx, node, row, tip, next);
+        else if ("MOVE".equals(phase)) phaseMove(ctx, node, row, tip, next);
+        else if ("SPLIT".equals(phase)) phaseSplit(ctx, node, row, tip, next);
+        else if ("STAMP".equals(phase)) phaseStamp(ctx, node, row, tip, next);
+        else if ("NEEDIMAGES".equals(phase)) phaseNeedImages(ctx, node, row, next);
+        else tickRow(ctx, node, rows, i + 1, tip, acted, done);
     }
 
     public static void resumeNow(Context ctx, NodeApi node, Done done) {
@@ -56,6 +63,14 @@ public final class MintEngine {
         cmd(node, "balance", new Cb() {
             @Override public void ok(JSONObject res) {
                 JSONArray bal = res.optJSONArray("response");
+                // tokenids already claimed by another row must not be re-bound
+                HashSet<String> bound = new HashSet<>();
+                JSONArray all = LocalStore.load(ctx);
+                for (int i = 0; i < all.length(); i++) {
+                    JSONObject r = all.optJSONObject(i);
+                    String tid = r == null ? "" : r.optString("tokenid", "");
+                    if (!tid.isEmpty()) bound.add(tid);
+                }
                 List<String> candidates = new ArrayList<>();
                 if (bal != null) {
                     for (int i = 0; i < bal.length(); i++) {
@@ -65,7 +80,8 @@ public final class MintEngine {
                         if (t == null) continue;
                         if (row.optString("name").equals(t.optString("name"))
                                 && row.optInt("size") == t.optInt("size")
-                                && row.optString("mode").equals(t.optString("mode"))) {
+                                && row.optString("mode").equals(t.optString("mode"))
+                                && !bound.contains(b.optString("tokenid"))) {
                             candidates.add(b.optString("tokenid"));
                         }
                     }
@@ -117,7 +133,10 @@ public final class MintEngine {
             return;
         }
         StateNft.Meta m = metaFromRow(row);
-        String cmd = "tokencreate name:" + StateNft.tokenMetadata(m).toString()
+        JSONObject tokenMeta = StateNft.tokenMetadata(m);
+        JSONObject itemTraits = row.optJSONObject("itemtraits");
+        if (itemTraits != null && itemTraits.length() > 0) put(tokenMeta, "traits", itemTraits);
+        String cmd = "tokencreate name:" + tokenMeta
                 + " amount:" + row.optInt("size")
                 + " decimals:0"
                 + " script:\"" + StateNft.script(row.optString("creatorpk"), row.optString("mode")) + "\""
@@ -142,23 +161,39 @@ public final class MintEngine {
             List<JSONObject> strays = new ArrayList<>();
             for (int i = 0; i < mine.length(); i++) {
                 JSONObject c = mine.optJSONObject(i);
-                if (c != null && !row.optString("creatoraddr").equals(c.optString("address"))) strays.add(c);
+                if (c != null && !row.optString("creatoraddr").equals(c.optString("address"))
+                        && LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) {
+                    strays.add(c);
+                }
             }
-            if (strays.isEmpty()) { setPhase(ctx, row, "SPLIT", done); return; }
-            JSONObject c = strays.get(0);
-            if (!LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) { done.done("Move pending"); return; }
-            LocalStore.setPending(ctx, c.optString("coinid"), tip);
-            String id = "mv" + row.optLong("id");
-            List<String> steps = new ArrayList<>();
-            steps.add("txninput id:" + id + " coinid:" + c.optString("coinid"));
-            steps.add("txnoutput id:" + id + " amount:" + c.optString("tokenamount")
-                    + " address:" + row.optString("creatoraddr")
-                    + " tokenid:" + row.optString("tokenid") + " storestate:true");
-            steps.add("txnstate id:" + id + " port:0 value:0");
-            steps.add("txnsign id:" + id + " publickey:auto");
-            steps.add("txnsign id:" + id + " publickey:" + row.optString("creatorpk"));
-            postTxn(node, id, steps, () -> done.done("Move posted"), e -> setError(ctx, row, e, done));
+            boolean anyStray = false;
+            for (int i = 0; i < mine.length(); i++) {
+                JSONObject c = mine.optJSONObject(i);
+                if (c != null && !row.optString("creatoraddr").equals(c.optString("address"))) anyStray = true;
+            }
+            if (!anyStray) { setPhase(ctx, row, "SPLIT", done); return; }
+            if (strays.isEmpty()) { done.done("Move confirming…"); return; }
+            moveNext(ctx, node, row, tip, strays, 0, done);
         }, e -> setError(ctx, row, e, done));
+    }
+
+    private static void moveNext(Context ctx, NodeApi node, JSONObject row, int tip,
+                                 List<JSONObject> strays, int i, Done done) {
+        if (i >= strays.size()) { done.done("Posted " + strays.size() + " move(s)"); return; }
+        JSONObject c = strays.get(i);
+        LocalStore.setPending(ctx, c.optString("coinid"), tip);
+        String id = "mv" + row.optLong("id") + "x" + i;
+        List<String> steps = new ArrayList<>();
+        steps.add("txninput id:" + id + " coinid:" + c.optString("coinid"));
+        steps.add("txnoutput id:" + id + " amount:" + c.optString("tokenamount")
+                + " address:" + row.optString("creatoraddr")
+                + " tokenid:" + row.optString("tokenid") + " storestate:true");
+        steps.add("txnstate id:" + id + " port:0 value:0");
+        steps.add("txnsign id:" + id + " publickey:auto");
+        steps.add("txnsign id:" + id + " publickey:" + row.optString("creatorpk"));
+        postTxn(node, id, steps,
+                () -> moveNext(ctx, node, row, tip, strays, i + 1, done),
+                e -> setError(ctx, row, e, done));
     }
 
     private static void phaseSplit(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
@@ -174,12 +209,23 @@ public final class MintEngine {
             }
             if (units >= row.optInt("size") && bigs.isEmpty()) { setPhase(ctx, row, "STAMP", done); return; }
             if (bigs.isEmpty()) { done.done("Waiting for split coins"); return; }
-            JSONObject c = bigs.get(0);
-            if (!LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) { done.done("Split pending"); return; }
-            LocalStore.setPending(ctx, c.optString("coinid"), tip);
-            splitCoin(node, row, c, Math.min(3, parseInt(c.optString("tokenamount", "1"))),
-                    () -> done.done("Split posted"), e -> setError(ctx, row, e, done));
+            List<JSONObject> ready = new ArrayList<>();
+            for (JSONObject c : bigs) {
+                if (LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) ready.add(c);
+            }
+            if (ready.isEmpty()) { done.done("Splits confirming…"); return; }
+            splitNext(ctx, node, row, tip, ready, 0, done);
         }, e -> setError(ctx, row, e, done));
+    }
+
+    private static void splitNext(Context ctx, NodeApi node, JSONObject row, int tip,
+                                  List<JSONObject> bigs, int i, Done done) {
+        if (i >= bigs.size()) { done.done("Posted " + bigs.size() + " split(s)"); return; }
+        JSONObject c = bigs.get(i);
+        LocalStore.setPending(ctx, c.optString("coinid"), tip);
+        splitCoin(node, row, c, Math.min(3, parseInt(c.optString("tokenamount", "1"))),
+                () -> splitNext(ctx, node, row, tip, bigs, i + 1, done),
+                e -> setError(ctx, row, e, done));
     }
 
     private static void splitCoin(NodeApi node, JSONObject row, JSONObject coin, int k, Runnable ok, java.util.function.Consumer<String> fail) {
@@ -205,6 +251,9 @@ public final class MintEngine {
         });
     }
 
+    /* STAMP processes EVERY ready blank per tick — engine.js behavior. The
+     * old one-per-tick port made a 17-item mint take the best part of an
+     * hour of screen-on time. */
     private static void phaseStamp(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
         tokenCoins(node, row.optString("tokenid"), coins -> {
             HashSet<String> used = new HashSet<>();
@@ -217,34 +266,74 @@ public final class MintEngine {
                 else if ("1".equals(c.optString("tokenamount"))) blanks.add(c);
             }
             updateCoinIds(row, coins);
+            // A depth-limited window can hide old stamps: merge the locally
+            // recorded ones so the planner never re-issues an index (a duplicate
+            // sealed identity would be unrecoverable under the locked contract)
+            mergeLocalStamps(row, used);
             if (used.size() >= row.optInt("size")) { setPhase(ctx, row, "DONE", done); return; }
-            if (blanks.isEmpty()) { LocalStore.upsert(ctx, row); done.done("Waiting for blank unit coins"); return; }
-            int idx = firstFree(row.optInt("size"), used);
-            JSONObject c = blanks.get(0);
-            if (!LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) {
+            List<String> ready = new ArrayList<>();
+            for (JSONObject c : blanks) {
+                String cid = c.optString("coinid");
+                if (LocalStore.pendingOk(ctx, cid, tip)) ready.add(cid);
+            }
+            if (ready.isEmpty()) {
                 LocalStore.upsert(ctx, row);
-                done.done("Stamp pending");
+                done.done(blanks.isEmpty() ? "Waiting for blank unit coins" : "Stamps confirming…");
                 return;
             }
-            String img = itemImage(row, idx);
-            if ("embed".equals(row.optString("mode")) && img.isEmpty()) {
-                put(row, "phase", "NEEDIMAGES");
-                put(row, "error", "missing image for item #" + idx);
-                LocalStore.upsert(ctx, row);
-                done.done(row.optString("error"));
-                return;
-            }
-            LocalStore.setPending(ctx, c.optString("coinid"), tip);
-            String id = "st" + row.optLong("id") + "x" + idx;
-            List<String> steps = new ArrayList<>();
-            steps.add("txninput id:" + id + " coinid:" + c.optString("coinid"));
-            steps.add("txnoutput id:" + id + " amount:1 address:" + row.optString("creatoraddr")
-                    + " tokenid:" + row.optString("tokenid") + " storestate:true");
-            steps.add("txnstate id:" + id + " port:0 value:" + idx);
-            if ("embed".equals(row.optString("mode"))) steps.add("txnstate id:" + id + " port:1 value:[" + img + "]");
-            steps.add("txnsign id:" + id + " publickey:auto");
-            postTxn(node, id, steps, () -> done.done("Stamped item #" + idx), e -> setError(ctx, row, e, done));
+            List<String[]> plan = planAssignments(ready, used, row.optInt("size"));
+            if (plan.isEmpty()) { LocalStore.upsert(ctx, row); done.done("All indices assigned — waiting for confirmations"); return; }
+            stampNext(ctx, node, row, tip, plan, 0, done);
         }, e -> setError(ctx, row, e, done));
+    }
+
+    /** Pure planner: assign the lowest free index to each ready blank coin.
+     *  Never re-issues an index in `used`; at most one index per coin. */
+    static List<String[]> planAssignments(List<String> readyCoinIds, HashSet<String> used, int size) {
+        List<String[]> out = new ArrayList<>();
+        HashSet<String> taken = new HashSet<>(used);
+        for (String cid : readyCoinIds) {
+            int free = -1;
+            for (int i = 1; i <= size; i++) {
+                if (!taken.contains(String.valueOf(i))) { free = i; break; }
+            }
+            if (free < 0) break;
+            taken.add(String.valueOf(free));
+            out.add(new String[]{ cid, String.valueOf(free) });
+        }
+        return out;
+    }
+
+    private static void stampNext(Context ctx, NodeApi node, JSONObject row, int tip,
+                                  List<String[]> plan, int i, Done done) {
+        if (i >= plan.size()) {
+            done.done("Posted " + plan.size() + " stamp" + (plan.size() == 1 ? "" : "s") + " this tick");
+            return;
+        }
+        String coinid = plan.get(i)[0];
+        int idx = parseInt(plan.get(i)[1]);
+        String img = itemImage(row, idx);
+        if ("embed".equals(row.optString("mode")) && img.isEmpty()) {
+            // stamping is irreversible under the locked contract — park until
+            // the plate is re-supplied, exactly like engine.js
+            put(row, "phase", "NEEDIMAGES");
+            put(row, "error", "missing image for item #" + idx);
+            LocalStore.upsert(ctx, row);
+            done.done(row.optString("error"));
+            return;
+        }
+        LocalStore.setPending(ctx, coinid, tip);
+        String id = "st" + row.optLong("id") + "x" + idx;
+        List<String> steps = new ArrayList<>();
+        steps.add("txninput id:" + id + " coinid:" + coinid);
+        steps.add("txnoutput id:" + id + " amount:1 address:" + row.optString("creatoraddr")
+                + " tokenid:" + row.optString("tokenid") + " storestate:true");
+        steps.add("txnstate id:" + id + " port:0 value:" + idx);
+        if ("embed".equals(row.optString("mode"))) steps.add("txnstate id:" + id + " port:1 value:[" + img + "]");
+        steps.add("txnsign id:" + id + " publickey:auto");
+        postTxn(node, id, steps,
+                () -> stampNext(ctx, node, row, tip, plan, i + 1, done),
+                e -> setError(ctx, row, e, done));
     }
 
     private static void phaseNeedImages(Context ctx, NodeApi node, JSONObject row, Done done) {
@@ -256,6 +345,7 @@ public final class MintEngine {
                 String idx = StateNft.stamped(c);
                 if (idx != null && idx.matches("^[0-9]+$")) used.add(idx);
             }
+            mergeLocalStamps(row, used);
             if (used.size() >= row.optInt("size")) {
                 setPhase(ctx, row, "DONE", done);
             } else if (missingLocalImages(row) == 0) {
@@ -267,7 +357,7 @@ public final class MintEngine {
         }, e -> done.done("Waiting for missing embedded images"));
     }
 
-    private static void postTxn(NodeApi node, String id, List<String> steps, Runnable ok, java.util.function.Consumer<String> fail) {
+    static void postTxn(NodeApi node, String id, List<String> steps, Runnable ok, java.util.function.Consumer<String> fail) {
         cmd(node, "txndelete id:" + id, new Cb() {
             @Override public void ok(JSONObject ignored) { build(); }
             @Override public void fail(String e) { build(); }
@@ -332,12 +422,43 @@ public final class MintEngine {
     }
 
     private static void tokenCoins(NodeApi node, String tid, CoinsCb ok, java.util.function.Consumer<String> fail) {
-        cmd(node, "coins relevant:true tokenid:" + tid, new Cb() {
-            @Override public void ok(JSONObject res) {
-                JSONArray arr = res.optJSONArray("response");
-                ok.ok(arr == null ? new JSONArray() : arr);
+        tokenCoinsBounded(node, tid, true, (coins, partial) -> ok.ok(coins), fail);
+    }
+
+    public interface CoinsBounded { void ok(JSONArray coins, boolean partial); }
+
+    /** Coin query that survives the 256KB IPC cap: full query first, then a
+     *  depth-halving ladder (4096 → 64 blocks from tip) delivering the newest
+     *  window when a big embed collection's states blow the reply limit.
+     *  partial=true means older coins may be missing — callers must not treat
+     *  absence as proof. (Family rule: bounded paging, adaptive halving.) */
+    public static void tokenCoinsBounded(NodeApi node, String tid, boolean relevant,
+                                         CoinsBounded ok, java.util.function.Consumer<String> fail) {
+        tryCoinsDepth(node, tid, relevant, 0, ok, fail);
+    }
+
+    private static void tryCoinsDepth(NodeApi node, String tid, boolean relevant, int depth,
+                                      CoinsBounded ok, java.util.function.Consumer<String> fail) {
+        String command = "coins " + (relevant ? "relevant:true " : "") + "tokenid:" + tid
+                + (depth > 0 ? " depth:" + depth : "");
+        node.cmd(command, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                if (!json.optBoolean("status", false)) {
+                    fail.accept(json.optString("error", "coins query failed"));
+                    return;
+                }
+                JSONArray arr = json.optJSONArray("response");
+                ok.ok(arr == null ? new JSONArray() : arr, depth > 0);
             }
-            @Override public void fail(String e) { fail.accept(e); }
+            @Override public void onError(String message) {
+                if (NodeApi.ERR_TOO_LONG.equals(message)) {
+                    int next = depth == 0 ? 4096 : depth / 2;
+                    if (next >= 64) { tryCoinsDepth(node, tid, relevant, next, ok, fail); return; }
+                    fail.accept("coin list exceeds the node link even at minimum depth");
+                    return;
+                }
+                fail.accept(message);
+            }
         });
     }
 
@@ -383,8 +504,10 @@ public final class MintEngine {
         m.error = row.optString("error", "");
         m.posted = row.optInt("posted", 0);
         m.postedAt = row.optInt("postedat", 0);
-        m.creator = true;
-        m.created = true;
+        m.owned = row.optInt("owned", 0);
+        m.minted = row.optInt("minted", 0);
+        m.created = row.optInt("created", 1) == 1;
+        m.creator = m.created;
         return m;
     }
 
@@ -406,6 +529,9 @@ public final class MintEngine {
         put(row, "phase", m.phase);
         put(row, "posted", m.posted);
         put(row, "postedat", m.postedAt);
+        put(row, "created", m.created ? 1 : 0);
+        put(row, "owned", m.owned);
+        put(row, "minted", m.minted);
         put(row, "error", m.error);
         put(row, "items", items == null ? new JSONArray() : items);
         return row;
@@ -438,6 +564,16 @@ public final class MintEngine {
             if (it != null && it.optInt("idx") == idx) return it.optString("image", "");
         }
         return "";
+    }
+
+    private static void mergeLocalStamps(JSONObject row, HashSet<String> used) {
+        JSONArray items = localItems(row);
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it != null && !it.optString("coinid", "").isEmpty()) {
+                used.add(String.valueOf(it.optInt("idx")));
+            }
+        }
     }
 
     private static int firstFree(int size, HashSet<String> used) {

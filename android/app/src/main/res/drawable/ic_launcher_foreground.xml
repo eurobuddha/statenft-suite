@@ -1,19 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Atelier "Sealed Plate": vermilion plate, ink block shadow, printer's-mark A -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#0B0B0C" android:pathData="M0,0h108v108h-108z" />
+    <!-- ink block shadow -->
+    <path android:fillColor="#111111" android:pathData="M33,33h46v46h-46z" />
+    <!-- vermilion plate with ink rule -->
     <path
-        android:strokeColor="#F7F7F5"
-        android:strokeWidth="2.4"
-        android:fillColor="@android:color/transparent"
-        android:pathData="M31,27h46v54h-46z" />
+        android:fillColor="#E63312"
+        android:strokeColor="#111111"
+        android:strokeWidth="2"
+        android:pathData="M29,29h46v46h-46z" />
+    <!-- geometric A, paper stroke -->
     <path
-        android:strokeColor="#C1121F"
-        android:strokeWidth="2.2"
-        android:strokeLineCap="square"
+        android:strokeColor="#F2F1EC"
+        android:strokeWidth="6"
+        android:strokeLineJoin="miter"
+        android:strokeLineCap="butt"
         android:fillColor="@android:color/transparent"
-        android:pathData="M39,41h30M39,54h30M39,67h18" />
+        android:pathData="M39.5,68 L52,40 L64.5,68" />
+    <path
+        android:strokeColor="#F2F1EC"
+        android:strokeWidth="5"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M44.5,57.5 h15" />
 </vector>

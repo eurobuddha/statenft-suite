@@ -37,7 +37,9 @@ public final class ImageLoader {
     private static void loadOver(final android.app.Activity act, final String url, final ImageView iv, final int reqPx) {
         iv.setTag(url);
         if (url == null || url.isEmpty()) return;
-        String key = reqPx + "|" + url;
+        // data-URI "urls" are 12KB strings — digest the cache key instead of
+        // hashing/equals-ing the whole payload on every lookup
+        String key = reqPx + "|" + url.length() + ":" + url.hashCode();
         Bitmap cached = CACHE.get(key);
         if (cached != null) { iv.setImageBitmap(cached); return; }
         EXEC.execute(() -> {

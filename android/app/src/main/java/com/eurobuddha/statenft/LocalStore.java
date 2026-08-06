@@ -13,12 +13,21 @@ public final class LocalStore {
 
     private LocalStore() {}
 
-    public static JSONArray load(Context c) {
+    /* The collections blob embeds base64 images (hundreds of KB); parse it
+     * once and keep the tree — callers hammer load()/findById() per card
+     * and per slot on the UI thread. Single-process app, so the cache is
+     * authoritative; save() keeps it in step. */
+    private static JSONArray sCollections = null;
+
+    public static synchronized JSONArray load(Context c) {
+        if (sCollections != null) return sCollections;
         String raw = prefs(c).getString(KEY_COLLECTIONS, "[]");
-        try { return new JSONArray(raw); } catch (Exception e) { return new JSONArray(); }
+        try { sCollections = new JSONArray(raw); } catch (Exception e) { sCollections = new JSONArray(); }
+        return sCollections;
     }
 
-    public static void save(Context c, JSONArray arr) {
+    public static synchronized void save(Context c, JSONArray arr) {
+        sCollections = arr;
         prefs(c).edit().putString(KEY_COLLECTIONS, arr.toString()).apply();
     }
 
@@ -70,6 +79,45 @@ public final class LocalStore {
             if (tip - p.optInt(k, 0) >= 6) p.remove(k);
         }
         prefs(c).edit().putString(KEY_PENDING, p.toString()).apply();
+    }
+
+    /* ---- engine heartbeat (trust: a stalled engine must be visible) ---- */
+
+    public static void recordHeartbeat(Context c, String msg) {
+        prefs(c).edit()
+                .putLong("engine_tick", System.currentTimeMillis())
+                .putString("engine_msg", msg == null ? "" : msg)
+                .apply();
+    }
+
+    public static long lastHeartbeat(Context c) {
+        return prefs(c).getLong("engine_tick", 0);
+    }
+
+    /* ---- wizard drafts (nft / token / collection) ---- */
+
+    public static void saveDraft(Context c, String key, JSONObject draft) {
+        prefs(c).edit().putString("draft_" + key, draft == null ? "" : draft.toString()).apply();
+    }
+
+    public static JSONObject loadDraft(Context c, String key) {
+        String raw = prefs(c).getString("draft_" + key, "");
+        if (raw == null || raw.isEmpty()) return null;
+        try { return new JSONObject(raw); } catch (Exception e) { return null; }
+    }
+
+    public static void clearDraft(Context c, String key) {
+        prefs(c).edit().remove("draft_" + key).apply();
+    }
+
+    public static JSONObject findByTokenid(Context c, String tokenid) {
+        if (tokenid == null || tokenid.isEmpty()) return null;
+        JSONArray arr = load(c);
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject r = arr.optJSONObject(i);
+            if (r != null && tokenid.equals(r.optString("tokenid", ""))) return r;
+        }
+        return null;
     }
 
     public static JSONObject findById(Context c, long id) {

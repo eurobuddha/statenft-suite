@@ -26,7 +26,7 @@ public final class IconResolver {
             Matcher m = ARTIMAGE.matcher(t);
             if (m.find()) {
                 String b64 = m.group(1).replaceAll("\\s+", "");
-                if (b64.length() > 16) return "data:image/jpeg;base64," + b64;
+                if (b64.length() > 16) return ImageTools.dataUri(b64);
             }
         }
         if (DATA_IMG.matcher(t).find()) return t;
@@ -35,7 +35,7 @@ public final class IconResolver {
             try { return "data:image/svg+xml;base64," + Base64.encodeToString(t.getBytes("UTF-8"), Base64.NO_WRAP); }
             catch (Exception e) { return null; }
         }
-        if (t.length() >= 100 && B64.matcher(t).matches()) return "data:image/png;base64," + t;
+        if (t.length() >= 100 && B64.matcher(t).matches()) return ImageTools.dataUri(t);
         return null;
     }
 }

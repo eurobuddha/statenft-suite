@@ -53,7 +53,7 @@ public class StateNftTest {
                 "Mx1234567890123456789012345678901234567890");
         assertTrue(cmds.contains("txnstate id:x port:0 value:7"));
         assertTrue(cmds.contains("txnstate id:x port:1 value:[AA==]"));
-        assertEquals("txnpost id:x", cmds.get(cmds.size() - 1));
+        assertEquals("txnsign id:x publickey:auto", cmds.get(cmds.size() - 1));
     }
 
     @Test public void strippedBuryUsesUnspendableGraveyard() throws Exception {

@@ -29,6 +29,12 @@ public final class Util {
         return "Token";
     }
 
+    /** URLs ride the tokencreate command line outside JSON — no spaces, quotes or semicolons. */
+    public static boolean validCmdUrl(String u) {
+        if (u == null || u.isEmpty()) return true;
+        return !u.contains(" ") && !u.contains("\"") && !u.contains("'") && !u.contains(";");
+    }
+
     public static String enc(String s) {
         try { return URLEncoder.encode(s, "UTF-8"); } catch (Exception e) { return s; }
     }

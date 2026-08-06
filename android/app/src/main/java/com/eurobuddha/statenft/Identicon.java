@@ -7,15 +7,34 @@ import android.graphics.Paint;
 import android.graphics.Path;
 
 public final class Identicon {
+    /* Placeholder identicons are drawn under every image on every render —
+     * cache them or grids allocate megabytes per rebuild. */
+    private static final android.util.LruCache<String, Bitmap> CACHE =
+            new android.util.LruCache<String, Bitmap>(6 * 1024 * 1024) {
+                @Override protected int sizeOf(String key, Bitmap value) { return value.getByteCount(); }
+            };
+
     private Identicon() {}
 
     public static Bitmap forToken(String tokenid, int px) {
+        String key = px + "|" + (tokenid == null ? "" : tokenid);
+        Bitmap cached = CACHE.get(key);
+        if (cached != null && !cached.isRecycled()) return cached;
+        Bitmap made = draw(tokenid, px);
+        CACHE.put(key, made);
+        return made;
+    }
+
+    private static Bitmap draw(String tokenid, int px) {
         String hex = (tokenid == null ? "" : tokenid).replaceFirst("(?i)^0x", "").toLowerCase();
         StringBuilder sb = new StringBuilder(hex);
         while (sb.length() < 32) sb.append('0');
         hex = sb.toString();
 
-        int seed = Integer.parseInt(hex.substring(0, 4), 16);
+        // Seeds are arbitrary strings ("slot3", "mint0"), not just hex
+        int seed = 0;
+        for (int i = 0; i < 4; i++) seed = seed * 31 + hex.charAt(i);
+        seed = seed & 0x7FFFFFFF;
         int fg = (seed & 1) == 0 ? 0xFF111111 : 0xFFC1121F;
         int bg = (seed & 2) == 0 ? 0xFFFFFFFF : 0xFFE8E8E4;
 
