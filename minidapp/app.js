@@ -331,8 +331,11 @@ function openExternal(tid) {
 function rememberOpened(tid, meta, script) {
   MDS.sql("SELECT id FROM collections WHERE tokenid='" + tid + "'", function (r) {
     if (r.rows && r.rows.length) { return; }
-    var m = ("" + script).match(/SIGNEDBY\((0x[0-9A-Fa-f]+)\)/);
-    var pk = m ? m[1] : "";
+    // Only genuine StateNFTs earn a collections row — filing a regular NFT
+    // here turns it into a phantom collection (the Jazminima bug). Anything
+    // else is still fully viewable via the detail META path, just not stored.
+    var pk = engineStateNftPk(script);
+    if (!pk) { return; }
     function insert(iscreator) {
       MDS.sql(
         "INSERT INTO collections (name,description,mode,size,base,ext,tokenid," +
@@ -1332,9 +1335,29 @@ function setBlock(b) {
   setTimeout(function () { chip.classList.remove("tick"); }, 700);
 }
 
+/* One-time healing: 'opened' rows whose script never fingerprinted as a
+ * StateNFT are phantoms (the Jazminima bug) — regular NFTs belong in the
+ * Singles section, not the collections grid. Verify each against the node
+ * and delete the impostors. */
+function cleanupPhantomRows(done) {
+  MDS.sql("SELECT id, tokenid FROM collections WHERE origin='opened' " +
+          "AND tokenid<>''", function (res) {
+    engineEach(res.rows || [], function (row, next) {
+      MDS.cmd("tokens tokenid:" + row.TOKENID, function (tres) {
+        var script = (tres.status && tres.response) ? tres.response.script : "";
+        if (engineStateNftPk(script)) { next(); return; }
+        MDS.log("StateNFT: row " + row.ID + " is not a StateNFT - unfiling");
+        MDS.sql("DELETE FROM collections WHERE id=" + row.ID, function () { next(); });
+      });
+    }, function () { if (done) { done(); } });
+  });
+}
+
 MDS.init(function (msg) {
   if (msg.event === "inited") {
-    engineInitTables(function () { loadCollectionList(); });
+    engineInitTables(function () {
+      cleanupPhantomRows(function () { loadCollectionList(); loadSingles(); });
+    });
     MDS.cmd("block", function (res) {
       if (res.status) { setBlock(res.response.block); }
     });
@@ -1804,5 +1827,3 @@ function tokenRowEl(row) {
   el.querySelector(".chip-hash").onclick = function () { copyText(row.tokenid, this); };
   return el;
 }
-
-loadSingles();

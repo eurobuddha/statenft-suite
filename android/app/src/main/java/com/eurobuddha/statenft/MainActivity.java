@@ -201,6 +201,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         node = new NodeApi(this, enabled -> {
             refreshNodeDot();
             if (enabled) {
+                cleanupPhantomCollections();
                 if (screen == Screen.LAUNCH) renderGallery();
                 else if (screen == Screen.GALLERY) galleryScan();
             }
@@ -386,6 +387,57 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     private void hideNav() {
         navBox.removeAllViews();
+    }
+
+    /** One-time healing: rows that were never engine-minted (created != 1)
+     *  must prove the StateNFT script fingerprint or leave the collections
+     *  store — a regular NFT filed here becomes a phantom collection with a
+     *  placeholder cover (the Jazminima bug) AND gets excluded from the
+     *  Singles classification. Legitimate adopted collections fingerprint
+     *  fine and are untouched. */
+    private boolean phantomsChecked = false;
+
+    private void cleanupPhantomCollections() {
+        if (phantomsChecked) return;
+        phantomsChecked = true;
+        JSONArray rows = LocalStore.load(this);
+        ArrayList<long[]> candidates = new ArrayList<>();
+        ArrayList<String> tokenids = new ArrayList<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            if (r == null) continue;
+            String tid = r.optString("tokenid", "");
+            if (tid.isEmpty()) continue;                    // mid-create engine rows stay
+            if (r.optInt("created", 0) == 1) continue;      // engine-minted rows stay
+            candidates.add(new long[]{ r.optLong("id") });
+            tokenids.add(tid);
+        }
+        verifyPhantom(candidates, tokenids, 0, new int[]{0});
+    }
+
+    private void verifyPhantom(ArrayList<long[]> ids, ArrayList<String> tids, int i, int[] removed) {
+        if (i >= ids.size()) {
+            if (removed[0] > 0) {
+                loadLocalCollections();
+                lastGallerySig = "";
+                if (screen == Screen.GALLERY) renderGallery();
+                toast(removed[0] + " regular NFT" + (removed[0] == 1 ? "" : "s")
+                        + " unfiled from collections — see Singles");
+            }
+            return;
+        }
+        node.cmd("tokens tokenid:" + tids.get(i), new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject t = json.optJSONObject("response");
+                String script = t == null ? "" : t.optString("script", "");
+                if (StateNft.creatorPk(script).isEmpty()) {
+                    LocalStore.removeById(MainActivity.this, ids.get(i)[0]);
+                    removed[0]++;
+                }
+                verifyPhantom(ids, tids, i + 1, removed);
+            }
+            @Override public void onError(String message) { verifyPhantom(ids, tids, i + 1, removed); }
+        });
     }
 
     /** Hand the mint to the foreground service (survives screen-off) and

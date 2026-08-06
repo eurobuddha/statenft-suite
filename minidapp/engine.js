@@ -40,6 +40,15 @@ function engineScript(pk, mode) {
 }
 
 /* pre-3.3 collections used this shape (creator bypass unconditional) */
+/* Definitive StateNFT fingerprint — either enforcement-script generation.
+ * Returns the creator pk, or null for any other token. Metadata shape is
+ * NEVER enough (any token can carry mode/size); only the script decides. */
+function engineStateNftPk(script) {
+  var m = ("" + script).match(/^IF SIGNEDBY\((0x[0-9A-Fa-f]+)\) THEN RETURN TRUE ENDIF RETURN VERIFYOUT\(@INPUT GETOUTADDR\(@INPUT\) @AMOUNT @TOKENID TRUE\)$/) ||
+          ("" + script).match(/^LET s=PREVSTATE\(0\) IF s EQ 0 AND SIGNEDBY\((0x[0-9A-Fa-f]+)\) THEN RETURN TRUE ENDIF RETURN SAMESTATE\(0 [01]\) AND VERIFYOUT\(@INPUT GETOUTADDR\(@INPUT\) @AMOUNT @TOKENID TRUE\)$/);
+  return m ? m[1] : null;
+}
+
 function engineScriptLegacy(pk) {
   return "IF SIGNEDBY(" + pk + ") THEN RETURN TRUE ENDIF " +
          "RETURN VERIFYOUT(@INPUT GETOUTADDR(@INPUT) @AMOUNT @TOKENID TRUE)";
@@ -210,11 +219,8 @@ function engineAdopt(cb) {
 function engineAdoptOne(tid, meta, myaddr, done) {
   engineCmd("tokens tokenid:" + tid, function (tres) {
     var script = "" + (tres.response.script || "");
-    // definitive StateNFT fingerprint: either enforcement script generation
-    var m = script.match(/^IF SIGNEDBY\((0x[0-9A-Fa-f]+)\) THEN RETURN TRUE ENDIF RETURN VERIFYOUT\(@INPUT GETOUTADDR\(@INPUT\) @AMOUNT @TOKENID TRUE\)$/) ||
-            script.match(/^LET s=PREVSTATE\(0\) IF s EQ 0 AND SIGNEDBY\((0x[0-9A-Fa-f]+)\) THEN RETURN TRUE ENDIF RETURN SAMESTATE\(0 [01]\) AND VERIFYOUT\(@INPUT GETOUTADDR\(@INPUT\) @AMOUNT @TOKENID TRUE\)$/);
-    if (!m) { done(); return; }        // some other token - not ours
-    var pk = m[1];
+    var pk = engineStateNftPk(script);
+    if (!pk) { done(); return; }       // some other token - not ours
     if (!meta.mode) { meta.mode = meta.base ? "url" : "embed"; }
     function finish(iscreator) {
       engineTokenCoins(tid, function (coins) {

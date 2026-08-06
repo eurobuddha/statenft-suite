@@ -120,6 +120,17 @@ public final class LocalStore {
         return null;
     }
 
+    public static synchronized void removeById(Context c, long id) {
+        JSONArray arr = load(c);
+        JSONArray next = new JSONArray();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject r = arr.optJSONObject(i);
+            if (r == null || r.optLong("id", -1) == id) continue;
+            next.put(r);
+        }
+        save(c, next);
+    }
+
     public static JSONObject findById(Context c, long id) {
         JSONArray arr = load(c);
         for (int i = 0; i < arr.length(); i++) {
