@@ -1811,6 +1811,20 @@ $("token-mint-btn").onclick = function () {
 
 /* ---------- singles & tokens catalogue ---------- */
 
+
+/* Token metadata lives at two possible levels: our mints put everything in
+ * the name-object; marketplace mints nest the name-object but keep url &co
+ * at the top level. Read BOTH — exactly like the native app's parseMeta. */
+function tokenField(row, key) {
+  var t = row.token;
+  if (typeof t !== "object" || !t) { return ""; }
+  var m = (t.name && typeof t.name === "object") ? t.name : null;
+  return (m && m[key]) || t[key] || "";
+}
+function tokenIconOf(row) {
+  return tokenField(row, "url") || tokenField(row, "image") || tokenField(row, "icon");
+}
+
 function loadSingles() {
   MDS.cmd("balance", function (res) {
     if (!res.status) { return; }
@@ -1821,12 +1835,11 @@ function loadSingles() {
       if (row.tokenid === "0x00") { continue; }
       var t = row.token;
       if (typeof t !== "object" || !t) { tokens.push(row); continue; }
-      var m = (t.name && typeof t.name === "object") ? t.name : t;
       // StateNFT collections live in the collections grid, not here
-      if (m.mode && m.size) { continue; }
+      if (tokenField(row, "mode") && tokenField(row, "size")) { continue; }
       var total = parseInt(row.total, 10) || 0;
-      var isNft = m.nft === "true" ||
-        (m.url && total > 0 && total <= 100 && !m.ticker);
+      var isNft = tokenField(row, "nft") === "true" ||
+        (tokenIconOf(row) && total > 0 && total <= 100 && !tokenField(row, "ticker"));
       if (isNft) { singles.push(row); } else { tokens.push(row); }
     }
     var sBox = $("singles-list"); sBox.innerHTML = "";
@@ -1841,9 +1854,6 @@ function loadSingles() {
 }
 
 function singleCard(row) {
-  var m = (row.token && typeof row.token === "object")
-    ? ((row.token.name && typeof row.token.name === "object") ? row.token.name : row.token)
-    : {};
   var el = document.createElement("div");
   el.className = "nft-card";
   el.innerHTML =
@@ -1852,9 +1862,9 @@ function singleCard(row) {
     "<div class='cc-sub'></div></div>";
   var img = el.querySelector("img");
   img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
-  img.src = iconSrc(m.url || m.image || m.icon || "") || placeholderSVG(1);
+  img.src = iconSrc(tokenIconOf(row)) || placeholderSVG(1);
   el.querySelector(".nft-no").textContent = "ed. " + (row.total || "1");
-  el.querySelector(".cc-name").textContent = m.name || "NFT";
+  el.querySelector(".cc-name").textContent = tokenField(row, "name") || (typeof row.token === "string" ? row.token : "NFT");
   el.querySelector(".cc-sub").textContent = shortHash(row.tokenid);
   el.onclick = function () { copyText(row.tokenid, null); };
   return el;
@@ -1862,8 +1872,7 @@ function singleCard(row) {
 
 function tokenRowEl(row) {
   var t = row.token;
-  var m = (t && typeof t === "object") ? ((t.name && typeof t.name === "object") ? t.name : t) : {};
-  var name = (typeof t === "string") ? t : (m.name || "Token");
+  var name = (typeof t === "string") ? t : (tokenField(row, "name") || "Token");
   var el = document.createElement("div");
   el.className = "token-row";
   el.innerHTML =
@@ -1871,9 +1880,10 @@ function tokenRowEl(row) {
     "<div class='tr-sub'></div></div><span class='chip-hash'>id</span>";
   var img = el.querySelector("img");
   img.onerror = function () { this.onerror = null; this.src = placeholderSVG(1); };
-  img.src = iconSrc(m.url || m.image || m.icon || "") || placeholderSVG(1);
+  img.src = iconSrc(tokenIconOf(row)) || placeholderSVG(1);
+  var tick = tokenField(row, "ticker");
   el.querySelector(".tr-name").textContent =
-    name + (m.ticker ? " · " + m.ticker.toUpperCase() : "");
+    name + (tick ? " · " + ("" + tick).toUpperCase() : "");
   el.querySelector(".tr-sub").textContent =
     "supply " + (row.total || "?") + " · " + shortHash(row.tokenid);
   el.querySelector(".chip-hash").onclick = function () { copyText(row.tokenid, this); };
