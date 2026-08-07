@@ -8,7 +8,9 @@ import java.util.regex.Pattern;
 
 public final class IconResolver {
     private static final Pattern PCT = Pattern.compile("%[0-9A-Fa-f]{2}");
-    private static final Pattern ARTIMAGE = Pattern.compile("<artimage[^>]*>([\\s\\S]*?)</artimage>", Pattern.CASE_INSENSITIVE);
+    /* closing tag optional: our engine writes "<artimage>B64", the wallet
+     * family writes "<artimage>B64</artimage>" — both must resolve */
+    private static final Pattern ARTIMAGE = Pattern.compile("<artimage[^>]*>([\\s\\S]*?)(?:</artimage>|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DATA_IMG = Pattern.compile("^data:image/(png|jpe?g|gif|webp|svg\\+xml|x-icon|bmp);", Pattern.CASE_INSENSITIVE);
     private static final Pattern HTTP = Pattern.compile("^https?://", Pattern.CASE_INSENSITIVE);
     private static final Pattern B64 = Pattern.compile("^[A-Za-z0-9+/]+={0,2}$");

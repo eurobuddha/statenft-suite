@@ -91,6 +91,10 @@ check("ipfs pointer resolves via gateway",
 rejects(iconSrc, "ipfs with hostile chars", "ipfs://x\"><script>");
 check("line-wrapped raw b64 accepted",
   iconSrc("UklG\nRj8/Pz9X\nRUJQVlA4"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
+check("open-tag-only artimage (our engine)",
+  iconSrc("<artimage>UklGRj8/Pz9XRUJQVlA4"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
+check("closed artimage (wallet/NFTwallet old style)",
+  iconSrc("<artimage>UklGRj8/Pz9XRUJQVlA4</artimage>"), "data:image/webp;base64,UklGRj8/Pz9XRUJQVlA4");
 check("webp data URI allowed in cssUrl",
   cssUrl("data:image/webp;base64,UklGRg=="), "data:image/webp;base64,UklGRg==");
 accepts(iconSrc, "<artimage> base64 icon", REAL.artimageIcon);

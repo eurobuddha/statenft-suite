@@ -74,8 +74,12 @@ function b64Mime(b64) {
  * allowlisted and the payload restricted to base64 characters. */
 function iconSrc(icon) {
   if (!icon) { return null; }
-  var raw = ("" + icon).indexOf("<artimage>") === 0
-    ? ("" + icon).substring(10) : ("" + icon);
+  // artimage comes in two wild variants: our engine's open-tag-only
+  // "<artimage>B64" and the wallet/NFTwallet's closed "<artimage>B64</artimage>".
+  // Strip both ends or the trailing tag poisons the base64 test.
+  var raw = ("" + icon)
+    .replace(/^<artimage[^>]*>/i, "")
+    .replace(/<\/artimage>\s*$/i, "");
   var hosted = safeUrl(raw);
   if (hosted) { return hosted; }
   // marketplace convention: the url IS a full data-image URI — allow only
