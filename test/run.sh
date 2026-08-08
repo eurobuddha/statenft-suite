@@ -69,6 +69,17 @@ else
 fi
 echo
 
+echo "== build artifacts (version-stamped, never overwritten)"
+# THE RULE: every build is ONE file, version in the filename, in releases/.
+# An unversioned zip at the repo root is a mutable build — forbidden.
+if ls ./*.zip >/dev/null 2>&1; then
+  echo "  FAIL  unversioned zip at repo root: $(ls ./*.zip) — builds live ONLY in releases/ with the version in the filename"
+  fail=1
+else
+  echo "  ok    no unversioned build at repo root"
+fi
+echo
+
 if [ "$fail" -eq 0 ]; then
   echo "ALL TESTS PASSED"
 else
