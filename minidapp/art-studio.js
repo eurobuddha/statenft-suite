@@ -265,7 +265,9 @@ function artRenderPreview() {
     stats = "largest " + maxB + "B raw (" + b64bytes(maxB) + "B on-chain)";
   }
   $("art-pv-stats").innerText = stats;
-  artRenderBudget();
+  /* the sheet just generated at n items — reuse it when the mint size matches
+   * rather than running the whole deterministic draw a second time */
+  artRenderBudget(n === artMintSize() ? col : null);
 }
 
 $("art-pv-n").onchange = function () {
@@ -327,9 +329,9 @@ function artMintSize() {
   return Math.max(2, Math.min(ART_MAX_MINT, parseInt($("g-size").value, 10) || 0));
 }
 
-function artRenderBudget() {
+function artRenderBudget(reuseCol) {
   $("g-iconitem").max = artMintSize();
-  var col = artCollection(ART_SEED, artMintSize(), ART_CFG);
+  var col = reuseCol || artCollection(ART_SEED, artMintSize(), ART_CFG);
   var maxB = 0;
   var over = 0;
   for (var i = 0; i < col.items.length; i++) {
@@ -350,7 +352,7 @@ function artRenderBudget() {
   return col;
 }
 
-$("g-size").onchange = artRenderBudget;
+$("g-size").onchange = function () { artRenderBudget(null); };
 
 /* rasterize an SVG to a wallet-icon JPEG base64 within ICON_BUDGET:
  * largest size/quality that fits wins (family convention) */
@@ -578,7 +580,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.0", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.1", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

@@ -121,6 +121,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private final java.util.HashSet<String> artOpenSlots = new java.util.HashSet<>();
     private JSONArray artItems = new JSONArray();
     private final ArrayList<android.graphics.Bitmap> artPreviews = new ArrayList<>();
+    private LinearLayout artSheetBox;                  // proof sheet + send button, hidden when stale
+    private final Runnable artSaveRunnable = this::artSaveDraft;  // debounced: seed keystrokes
     private boolean artDraftLoaded = false;
     private String genCount = "12";
     private boolean genBusy = false;
@@ -1853,6 +1855,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         body.addView(Design.note(this, "Deterministic: the seed and style reproduce every "
                 + "plate byte-for-byte — the same design mints identically in the MiniDapp."), lpm(0, 4, 0, 12));
 
+        final TextView warm = Design.note(this, "Warming up the art engine…");
+        body.addView(warm, lpm(0, 0, 0, 12));
+
         ArtStudio.with(this, studio -> {
             if (screen != Screen.CREATE_GENERATIVE) return;
             if (ART_STYLE_LIST == null) {
@@ -1870,6 +1875,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 });
                 return;
             }
+            body.removeView(warm);
             buildArtStudioUi(studio, cfg);
         });
     }
@@ -1925,7 +1931,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         LinearLayout seedRow = horizontal(Gravity.CENTER_VERTICAL);
         EditText seed = input("atelier-genesis");
         seed.setText(artSeed);
-        seed.addTextChangedListener(watch(sv -> { artSeed = sv.trim(); artSaveDraft(); }));
+        seed.addTextChangedListener(watch(sv -> {
+            artSeed = sv.trim();
+            if (artItems.length() > 0) {
+                // the sheet no longer derives from the seed on display — retire it
+                artItems = new JSONArray();
+                artPreviews.clear();
+                if (artSheetBox != null) artSheetBox.setVisibility(android.view.View.GONE);
+            }
+            body.removeCallbacks(artSaveRunnable);
+            body.postDelayed(artSaveRunnable, 400);
+        }));
         seedRow.addView(seed, weight(46, 0, 4));
         TextView dice = Design.button(this, "🎲", false);
         dice.setOnClickListener(v -> {
@@ -2057,8 +2073,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         genRow.addView(gen, weight(46, 8, 0));
         body.addView(genRow, lpm(0, 0, 0, 10));
 
+        artSheetBox = vertical();
+        body.addView(artSheetBox);
         if (artItems.length() > 0) {
-            body.addView(Design.note(this, "Tap a plate for its traits and rarity."), lpm(0, 0, 0, 8));
+            artSheetBox.addView(Design.note(this, "Tap a plate for its traits and rarity."), lpm(0, 0, 0, 8));
             int cols = 3;
             LinearLayout row = null;
             for (int i = 0; i < artItems.length(); i++) {
@@ -2066,7 +2084,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 final JSONObject item = artItems.optJSONObject(i);
                 if (i % cols == 0) {
                     row = horizontal(Gravity.TOP);
-                    body.addView(row, lpm(0, 0, 0, 8));
+                    artSheetBox.addView(row, lpm(0, 0, 0, 8));
                 }
                 FrameLayout tile = new FrameLayout(this);
                 tile.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
@@ -2096,7 +2114,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             TextView use = Design.button(this, genBusy ? "Composing…" : "Send to collection wizard", true);
             use.setEnabled(!genBusy);
             use.setOnClickListener(v -> sendArtToCollection());
-            body.addView(use, lph(52, 0, 12, 0, 8));
+            artSheetBox.addView(use, lph(52, 0, 12, 0, 8));
         }
     }
 
@@ -2218,7 +2236,18 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 }
                 put(traitsMap, String.valueOf(i + 1), attrs);
             }
-            final String errF = err;
+            /* Wallet icon parity with the MiniDapp: a lead SVG within
+             * ICON_BUDGET embeds as crisp vector text (the mint flow's own
+             * fallback), but an oversized one must be rasterized here or the
+             * wallet tile falls back to the placeholder. */
+            String iconB64 = "";
+            if (err.isEmpty() && images.length > 0 && images[0].length() > ImageTools.ICON_BUDGET) {
+                JSONObject lead = itemsF.optJSONObject(0);
+                android.graphics.Bitmap b = lead == null ? null
+                        : ArtStudio.svgBitmap(lead.optString("svg"), 512);
+                iconB64 = ImageTools.iconFromBitmap(b, ImageTools.ICON_BUDGET);
+            }
+            final String errF = err, iconF = iconB64;
             runOnUiThread(() -> {
                 genBusy = false;
                 if (!errF.isEmpty()) { toast(errF); renderGenerative(); return; }
@@ -2226,6 +2255,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 createSize = String.valueOf(images.length);
                 createImages = images;
                 collectionItemTraits = traitsMap;
+                if (!iconF.isEmpty()) createIconB64 = iconF;
                 toast(images.length + " editions drawn — finish the collection details");
                 renderCreateCollection();
             });

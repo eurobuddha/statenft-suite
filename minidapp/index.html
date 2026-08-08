@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atelier</title>
-<link rel="stylesheet" href="styles.css?v=410">
-<script type="text/javascript" src="mds.js?v=410"></script>
-<script type="text/javascript" src="sanitize.js?v=410"></script>
-<script type="text/javascript" src="engine.js?v=410"></script>
-<script type="text/javascript" src="art.js?v=410"></script>
-<script type="text/javascript" src="sendall.js?v=410"></script>
+<link rel="stylesheet" href="styles.css?v=411">
+<script type="text/javascript" src="mds.js?v=411"></script>
+<script type="text/javascript" src="sanitize.js?v=411"></script>
+<script type="text/javascript" src="engine.js?v=411"></script>
+<script type="text/javascript" src="art.js?v=411"></script>
+<script type="text/javascript" src="sendall.js?v=411"></script>
 </head>
 <body>
 <div class="beam"></div>
@@ -448,7 +448,7 @@
 
 <footer class="colophon">
   <span>identities enforced by KISS&nbsp;VM token script</span>
-  <span id="app-version" class="mono">Atelier v4.1.0</span>
+  <span id="app-version" class="mono">Atelier v4.1.1</span>
 </footer>
 
 <!-- burial modal -->
@@ -544,8 +544,9 @@
     <h2 class="modal-title">Send the whole collection</h2>
     <p id="sendall-count" class="bury-line"></p>
     <p class="cert-note">A single transaction cannot carry more than one sealed
-      identity &mdash; the collection travels as one identity-preserving
-      transfer per lot, posted in sequence. Re-run to resume if interrupted.</p>
+      identity &mdash; every lot gets its own identity-preserving transfer, all
+      posted at once and re-posted each block until the chain confirms each
+      departure. Runs in the background; you can close this page.</p>
     <label class="flabel" for="sendall-recipient">Recipient address (0x or Mx)</label>
     <input id="sendall-recipient" type="text" spellcheck="false" placeholder="Mx&hellip; / 0x&hellip;" />
     <div class="modal-actions">
@@ -591,7 +592,7 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="text/javascript" src="app.js?v=410"></script>
-<script type="text/javascript" src="art-studio.js?v=410"></script>
+<script type="text/javascript" src="app.js?v=411"></script>
+<script type="text/javascript" src="art-studio.js?v=411"></script>
 </body>
 </html>

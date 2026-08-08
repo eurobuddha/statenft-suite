@@ -1107,6 +1107,7 @@ function removeFromList() {
   clearTimeout(REMOVE_TIMER);
   REMOVE_ARMED = false;
   var id = OPEN_ROW.ID;
+  MDS.sql("DELETE FROM art_meta WHERE collectionid=" + id, function () {});
   MDS.sql("DELETE FROM items WHERE collectionid=" + id, function () {
     MDS.sql("DELETE FROM collections WHERE id=" + id, function () {
       toast("Removed from your list — you hold no coins of it, nothing " +
@@ -1403,6 +1404,7 @@ function cleanupPhantomRows(done) {
         var script = (tres.status && tres.response) ? tres.response.script : "";
         if (engineStateNftPk(script)) { next(); return; }
         MDS.log("StateNFT: row " + row.ID + " is not a StateNFT - unfiling");
+        MDS.sql("DELETE FROM art_meta WHERE collectionid=" + row.ID, function () {});
         MDS.sql("DELETE FROM collections WHERE id=" + row.ID, function () { next(); });
       });
     }, function () { if (done) { done(); } });
@@ -1926,7 +1928,7 @@ function openSendAll() {
     var s = (res.rows && res.rows.length) ? res.rows[0] : null;
     if (s && s.STATUS === "ACTIVE") {
       $("sendall-status").innerText = "a send is already running — " +
-        coins.length + " lot(s) left, one departs per block.";
+        coins.length + " lot(s) still to depart.";
       $("sendall-go").disabled = true;
     } else if (s && s.STATUS === "ERROR") {
       $("sendall-status").innerText = "last send errored: " + (s.ERROR || "?") +
@@ -1963,8 +1965,9 @@ function sendAllGo() {
         function () {
           MDS.comms.solo("send", function () {});
           status.innerText = "";
-          toast("Sending " + coins.length + " lots in the background — one " +
-                "identity-preserving txn per block; you can close this page");
+          toast("Sending " + coins.length + " lots in the background — all " +
+                "transfers post now and retry each block until the chain " +
+                "confirms; you can close this page");
           $("sendall-recipient").value = "";
           setTimeout(function () {
             $("sendall-backdrop").classList.add("hidden");

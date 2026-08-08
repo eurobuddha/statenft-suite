@@ -113,6 +113,17 @@ public final class ImageTools {
         }
     }
 
+    /** Wallet icon from an already-rasterized bitmap (e.g. an SVG plate too big
+     *  to embed as vector text) — square-cropped + compressed like every icon. */
+    public static String iconFromBitmap(Bitmap bmp, int budget) {
+        if (bmp == null) return "";
+        try {
+            return compressIconBitmap(centerSquare(bmp), budget);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     public static String iconFromBase64(String b64, int budget) {
         if (b64 == null || b64.isEmpty()) return "";
         try {
