@@ -48,7 +48,6 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private static final int PICK_CREATE = 1;
     private static final int PICK_RECOVERY = 2;
     private static final int PICK_NFT = 3;
-    private static final int PICK_GEN = 4;
     private static final int PICK_TOKICON = 5;
     private static final int PICK_COLLICON = 6;
 
@@ -112,13 +111,18 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private final ArrayList<String[]> tokPairs = new ArrayList<>();
     private String pairKeyDraft = "", pairValueDraft = "";
 
-    /* generative stack */
-    private final ArrayList<int[]> genCombos = new ArrayList<>();
-    private final ArrayList<Boolean> genLocks = new ArrayList<>();
-    private final ArrayList<android.graphics.Bitmap> genPreviews = new ArrayList<>();
+    /* generative studio (artBox packs via ArtStudio bridge) */
+    private static final int ART_EMBED_BUDGET = 8192;  // b64 chars per SVG — every pack is tuned+tested to this
+    private static org.json.JSONArray ART_STYLE_LIST;  // [{key,label}] from art.js, cached for the process
+    private static final java.util.HashMap<String, android.graphics.Bitmap> ART_THUMBS = new java.util.HashMap<>();
+    private String artStyle = "mandala";
+    private String artSeed = "atelier-genesis";
+    private final java.util.HashMap<String, JSONObject> artCfgs = new java.util.HashMap<>();
+    private final java.util.HashSet<String> artOpenSlots = new java.util.HashSet<>();
+    private JSONArray artItems = new JSONArray();
+    private final ArrayList<android.graphics.Bitmap> artPreviews = new ArrayList<>();
+    private boolean artDraftLoaded = false;
     private String genCount = "12";
-    private String genLayerNameDraft = "";
-    private int pendingGenLayer = -1;
     private boolean genBusy = false;
     private JSONObject collectionItemTraits = null;
 
@@ -1289,8 +1293,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 "A fungible token — name, ticker, supply, decimals, icon.",
                 null, v -> renderCreateToken()), lpm(0, 0, 0, 14));
         body.addView(studioCard("№ 4", "Generative Collection",
-                "Layer stacks with rarity weights — backgrounds, bodies, accessories — combined into unique editions, traits auto-filled.",
-                "New", v -> renderGenerative()), lpm(0, 0, 0, 14));
+                "18 on-chain SVG style packs — Mandala to Panda Punks. Deterministic from a seed, rarity sliders, traits auto-filled.",
+                "artBox", v -> renderGenerative()), lpm(0, 0, 0, 14));
 
         /* drafts shelf */
         boolean hasNftDraft = !nftName.trim().isEmpty() || !nftImage.isEmpty() || !nftTraits.isEmpty();
@@ -1843,168 +1847,247 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         setScreen(Screen.CREATE_GENERATIVE, this::renderStudio);
         appbar("Generative", true, false);
         hideNav();
+        if (!artDraftLoaded) { artDraftLoaded = true; artLoadDraft(); }
 
-        JSONObject model = GenerativeComposer.load(this);
-        JSONArray layers = GenerativeComposer.layers(model);
+        body.addView(Design.lot(this, "The Generator — 18 on-chain SVG style packs"));
+        body.addView(Design.note(this, "Deterministic: the seed and style reproduce every "
+                + "plate byte-for-byte — the same design mints identically in the MiniDapp."), lpm(0, 4, 0, 12));
 
-        body.addView(Design.lot(this, "The stack — drawn bottom to top"));
-        body.addView(Design.note(this, "PNG variants keep transparency. Tap a rarity stamp to cycle Common → Uncommon → Rare → Epic."), lpm(0, 4, 0, 12));
+        ArtStudio.with(this, studio -> {
+            if (screen != Screen.CREATE_GENERATIVE) return;
+            if (ART_STYLE_LIST == null) {
+                studio.styles(list -> {
+                    ART_STYLE_LIST = list;
+                    if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+                });
+                return;
+            }
+            JSONObject cfg = artCfgs.get(artStyle);
+            if (cfg == null) {
+                studio.defaultConfig(artStyle, c2 -> {
+                    artCfgs.put(artStyle, c2);
+                    if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+                });
+                return;
+            }
+            buildArtStudioUi(studio, cfg);
+        });
+    }
 
-        for (int i = 0; i < layers.length(); i++) {
-            final int li = i;
-            JSONObject layer = layers.optJSONObject(i);
-            if (layer == null) continue;
+    private void buildArtStudioUi(ArtStudio studio, JSONObject cfg) {
+        /* ---- style picker ---- */
+        LinearLayout strip = horizontal(Gravity.TOP);
+        for (int i = 0; i < ART_STYLE_LIST.length(); i++) {
+            JSONObject st = ART_STYLE_LIST.optJSONObject(i);
+            if (st == null) continue;
+            final String key = st.optString("key");
+            LinearLayout cell = vertical();
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+            cell.setPadding(0, 0, dp(8), 0);
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            boolean active = key.equals(artStyle);
+            iv.setBackground(Design.ruled(this, Design.CARD(), active ? Design.ACCENT() : Design.INK(),
+                    active ? 2.5f : 1.5f));
+            iv.setPadding(dp(2), dp(2), dp(2), dp(2));
+            android.graphics.Bitmap tb = ART_THUMBS.get(key);
+            if (tb != null) iv.setImageBitmap(tb);
+            else studio.thumb(key, svg -> new Thread(() -> {
+                android.graphics.Bitmap b = ArtStudio.svgBitmap(svg, dp(72));
+                runOnUiThread(() -> {
+                    if (b != null) ART_THUMBS.put(key, b);
+                    iv.setImageBitmap(b);
+                });
+            }).start());
+            iv.setClickable(true);
+            iv.setOnClickListener(v -> {
+                artStyle = key;
+                artItems = new JSONArray();
+                artPreviews.clear();
+                artOpenSlots.clear();
+                artSaveDraft();
+                renderGenerative();
+            });
+            cell.addView(iv, new LinearLayout.LayoutParams(dp(72), dp(72)));
+            TextView nm = Design.text(this, st.optString("label"), 8.5f,
+                    active ? Design.ACCENT() : Design.INK(), Design.sansBold());
+            nm.setSingleLine(true);
+            nm.setGravity(Gravity.CENTER);
+            cell.addView(nm, new LinearLayout.LayoutParams(dp(76), -2));
+            strip.addView(cell);
+        }
+        HorizontalScroll styleScroll = new HorizontalScroll(this);
+        styleScroll.addView(strip);
+        body.addView(styleScroll, lpm(0, 0, 0, 14));
+
+        /* ---- seed ---- */
+        body.addView(Design.lot(this, "Collection seed — same seed, same art, forever"));
+        LinearLayout seedRow = horizontal(Gravity.CENTER_VERTICAL);
+        EditText seed = input("atelier-genesis");
+        seed.setText(artSeed);
+        seed.addTextChangedListener(watch(sv -> { artSeed = sv.trim(); artSaveDraft(); }));
+        seedRow.addView(seed, weight(46, 0, 4));
+        TextView dice = Design.button(this, "🎲", false);
+        dice.setOnClickListener(v -> {
+            String chars = "abcdefghjkmnpqrstuvwxyz23456789";
+            StringBuilder sb = new StringBuilder("atelier-");
+            java.util.Random r = new java.util.Random();
+            for (int i = 0; i < 10; i++) sb.append(chars.charAt(r.nextInt(chars.length())));
+            artSeed = sb.toString();
+            artItems = new JSONArray();
+            artPreviews.clear();
+            artSaveDraft();
+            renderGenerative();
+        });
+        seedRow.addView(dice, new LinearLayout.LayoutParams(dp(56), dp(46)));
+        body.addView(seedRow, lpm(0, 6, 0, 14));
+
+        /* ---- trait pool & rarity ---- */
+        body.addView(sectionHead("Trait pool & rarity", ""));
+        JSONArray slots = cfg.optJSONArray("slots");
+        if (slots != null) for (int i = 0; i < slots.length(); i++) {
+            final JSONObject slot = slots.optJSONObject(i);
+            if (slot == null) continue;
+            final String slotKey = slot.optString("key", "s" + i);
             LinearLayout card = lotCard();
             LinearLayout head = horizontal(Gravity.CENTER_VERTICAL);
             LinearLayout copy = vertical();
-            copy.addView(Design.lot(this, "Layer " + (i + 1)));
-            copy.addView(Design.display(this, layer.optString("name", "Layer"), 13));
+            copy.addView(Design.display(this, slot.optString("label", slotKey), 13));
+            JSONArray vs = slot.optJSONArray("variants");
+            int on = 0, total = vs == null ? 0 : vs.length();
+            if (vs != null) for (int k = 0; k < total; k++) {
+                JSONObject v2 = vs.optJSONObject(k);
+                if (v2 != null && v2.optBoolean("on", true) && v2.optInt("weight", 0) > 0) on++;
+            }
+            copy.addView(Design.note(this, on + "/" + total + " on"));
             head.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
-            TextView del = Design.text(this, "×", 18, Design.ACCENT(), Design.sansBold());
-            del.setPadding(dp(10), 0, dp(10), 0);
-            del.setClickable(true);
-            del.setOnClickListener(v -> {
-                JSONArray vs = layer.optJSONArray("variants");
-                if (vs != null) for (int k = 0; k < vs.length(); k++) {
-                    GenerativeComposer.deleteVariantImage(this, vs.optJSONObject(k).optString("file"));
-                }
-                JSONArray next = new JSONArray();
-                for (int k = 0; k < layers.length(); k++) if (k != li) next.put(layers.optJSONObject(k));
-                put(model, "layers", next);
-                GenerativeComposer.save(this, model);
-                clearGenPreviews();
+            boolean open = artOpenSlots.contains(slotKey);
+            TextView arrow = Design.text(this, open ? "▴" : "▾", 14, Design.ACCENT(), Design.sansBold());
+            head.addView(arrow);
+            head.setClickable(true);
+            head.setOnClickListener(v -> {
+                if (!artOpenSlots.remove(slotKey)) artOpenSlots.add(slotKey);
                 renderGenerative();
             });
-            head.addView(del);
             card.addView(head);
 
-            JSONArray vs = layer.optJSONArray("variants");
-            LinearLayout thumbs = horizontal(Gravity.CENTER_VERTICAL);
-            if (vs != null) for (int k = 0; k < vs.length(); k++) {
-                final int vi = k;
-                JSONObject variant = vs.optJSONObject(k);
-                if (variant == null) continue;
-                LinearLayout cell = vertical();
-                cell.setGravity(Gravity.CENTER_HORIZONTAL);
-                cell.setPadding(0, 0, dp(8), 0);
-                ImageView iv = new ImageView(this);
-                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                iv.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
-                android.graphics.Bitmap vb = GenerativeComposer.variantBitmap(this, variant.optString("file"));
-                if (vb != null) iv.setImageBitmap(vb);
-                iv.setOnLongClickListener(v -> {
-                    GenerativeComposer.deleteVariantImage(this, variant.optString("file"));
-                    JSONArray nextVs = new JSONArray();
-                    for (int q = 0; q < vs.length(); q++) if (q != vi) nextVs.put(vs.optJSONObject(q));
-                    put(layer, "variants", nextVs);
-                    GenerativeComposer.save(this, model);
-                    clearGenPreviews();
-                    renderGenerative();
-                    return true;
-                });
-                cell.addView(iv, new LinearLayout.LayoutParams(dp(52), dp(52)));
-                TextView nm = Design.text(this, variant.optString("name", "V" + (k + 1)), 8.5f, Design.INK(), Design.sansBold());
-                nm.setSingleLine(true);
-                nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                nm.setGravity(Gravity.CENTER);
-                cell.addView(nm, new LinearLayout.LayoutParams(dp(56), -2));
-                int w = variant.optInt("weight", 30);
-                TextView wt = Design.pill(this, GenerativeComposer.weightName(w),
-                        w <= 10 ? Design.PILL_MINE : Design.PILL_DIM);
-                wt.setClickable(true);
-                wt.setOnClickListener(v -> {
-                    put(variant, "weight", GenerativeComposer.nextWeight(variant.optInt("weight", 30)));
-                    GenerativeComposer.save(this, model);
-                    renderGenerative();
-                });
-                cell.addView(wt, lpm(0, 3, 0, 0));
-                thumbs.addView(cell);
+            if (open && vs != null) {
+                int weightTotal = 0;
+                for (int k = 0; k < vs.length(); k++) {
+                    JSONObject v2 = vs.optJSONObject(k);
+                    if (v2 != null && v2.optBoolean("on", true)) weightTotal += v2.optInt("weight", 0);
+                }
+                final int wt = Math.max(1, weightTotal);
+                for (int k = 0; k < vs.length(); k++) {
+                    final JSONObject variant = vs.optJSONObject(k);
+                    if (variant == null) continue;
+                    LinearLayout row = horizontal(Gravity.CENTER_VERTICAL);
+                    android.widget.CheckBox cb = new android.widget.CheckBox(this);
+                    cb.setChecked(variant.optBoolean("on", true));
+                    cb.setOnCheckedChangeListener((b2, checked) -> {
+                        put(variant, "on", checked);
+                        artItems = new JSONArray();
+                        artSaveDraft();
+                        renderGenerative();
+                    });
+                    row.addView(cb);
+                    TextView nm = Design.text(this, variant.optString("name"), 11.5f, Design.INK(), Design.sans());
+                    nm.setSingleLine(true);
+                    row.addView(nm, new LinearLayout.LayoutParams(dp(96), -2));
+                    android.widget.SeekBar sb = new android.widget.SeekBar(this);
+                    sb.setMax(100);
+                    sb.setProgress(Math.min(100, variant.optInt("weight", 0)));
+                    final TextView pct = Design.text(this,
+                            pctText(variant, wt), 9.5f, Design.DIM(), Design.mono());
+                    sb.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+                        @Override public void onProgressChanged(android.widget.SeekBar s2, int p2, boolean fromUser) {
+                            if (!fromUser) return;
+                            put(variant, "weight", p2);
+                            pct.setText(pctText(variant, wt));
+                        }
+                        @Override public void onStartTrackingTouch(android.widget.SeekBar s2) {}
+                        @Override public void onStopTrackingTouch(android.widget.SeekBar s2) {
+                            artItems = new JSONArray();
+                            artSaveDraft();
+                            renderGenerative();
+                        }
+                    });
+                    row.addView(sb, new LinearLayout.LayoutParams(0, -2, 1));
+                    pct.setGravity(Gravity.END);
+                    row.addView(pct, new LinearLayout.LayoutParams(dp(44), -2));
+                    card.addView(row, lpm(0, 2, 0, 0));
+                }
             }
-            TextView addV = Design.button(this, "+", false);
-            addV.setOnClickListener(v -> {
-                pendingGenLayer = li;
-                pendingPickContext = PICK_GEN;
-                pendingBatchImages = true;
-                launchPicker(true);
-            });
-            thumbs.addView(addV, new LinearLayout.LayoutParams(dp(52), dp(52)));
-            HorizontalScroll hs = new HorizontalScroll(this);
-            hs.addView(thumbs);
-            card.addView(hs, lpm(0, 10, 0, 0));
-            body.addView(card, lpm(0, 0, 0, 12));
+            body.addView(card, lpm(0, 0, 0, 8));
         }
 
-        /* add layer */
-        LinearLayout addRow = horizontal(Gravity.CENTER_VERTICAL);
-        EditText layerName = input("New layer — e.g. Background");
-        layerName.setText(genLayerNameDraft);
-        layerName.addTextChangedListener(watch(sv -> genLayerNameDraft = sv));
-        addRow.addView(layerName, weight(46, 0, 4));
-        TextView addL = Design.button(this, "Add layer", false);
-        addL.setOnClickListener(v -> {
-            String n = genLayerNameDraft.trim();
-            if (n.isEmpty()) { toast("Name the layer first"); return; }
-            if (layers.length() >= 8) { toast("8 layers maximum"); return; }
-            JSONObject layer = new JSONObject();
-            put(layer, "name", n);
-            put(layer, "variants", new JSONArray());
-            layers.put(layer);
-            put(model, "layers", layers);
-            GenerativeComposer.save(this, model);
-            genLayerNameDraft = "";
+        LinearLayout shuffleRow = horizontal(Gravity.CENTER_VERTICAL);
+        TextView shufR = Design.button(this, "🎲 Rarity", false);
+        shufR.setOnClickListener(v -> { artShuffle(cfg, false); });
+        shuffleRow.addView(shufR, weight(44, 0, 4));
+        TextView shufP = Design.button(this, "🎲 Traits", false);
+        shufP.setOnClickListener(v -> { artShuffle(cfg, true); });
+        shuffleRow.addView(shufP, weight(44, 4, 4));
+        TextView reset = Design.button(this, "Reset", false);
+        reset.setOnClickListener(v -> {
+            artCfgs.remove(artStyle);
+            artItems = new JSONArray();
+            artPreviews.clear();
+            artSaveDraft();
             renderGenerative();
         });
-        addRow.addView(addL, new LinearLayout.LayoutParams(dp(110), dp(46)));
-        body.addView(addRow, lpm(0, 0, 0, 16));
+        shuffleRow.addView(reset, weight(44, 4, 0));
+        body.addView(shuffleRow, lpm(0, 4, 0, 6));
 
-        long combos = GenerativeComposer.possibleCombos(model);
-        body.addView(sectionHead("Proof sheet", combos == 0 ? "" : combos + " possible"));
+        final TextView capNote = Design.note(this, "");
+        body.addView(capNote, lpm(0, 0, 0, 14));
+        studio.capacity(cfg, n -> capNote.setText("trait space: "
+                + String.format(Locale.US, "%,d", n) + " distinct combinations"));
 
+        /* ---- proof sheet ---- */
+        body.addView(sectionHead("Proof sheet", artItems.length() == 0 ? "" : artItems.length() + " plates"));
         LinearLayout genRow = horizontal(Gravity.CENTER_VERTICAL);
         EditText count = input("12");
         count.setText(genCount);
         count.addTextChangedListener(watch(sv -> genCount = sv));
         genRow.addView(count, new LinearLayout.LayoutParams(dp(70), dp(46)));
-        TextView gen = Design.button(this, genCombos.isEmpty() ? "Generate" : "Re-roll unlocked", true);
-        gen.setOnClickListener(v -> generateCombos(model));
+        TextView gen = Design.button(this, genBusy ? "Drawing…" : "Generate", true);
+        gen.setEnabled(!genBusy);
+        gen.setOnClickListener(v -> artGenerate(studio, cfg));
         genRow.addView(gen, weight(46, 8, 0));
         body.addView(genRow, lpm(0, 0, 0, 10));
 
-        if (!genCombos.isEmpty()) {
-            body.addView(Design.note(this, "Tap a plate to lock it (vermilion frame survives re-rolls)."), lpm(0, 0, 0, 8));
+        if (artItems.length() > 0) {
+            body.addView(Design.note(this, "Tap a plate for its traits and rarity."), lpm(0, 0, 0, 8));
             int cols = 3;
             LinearLayout row = null;
-            for (int i = 0; i < genCombos.size(); i++) {
+            for (int i = 0; i < artItems.length(); i++) {
                 final int gi = i;
+                final JSONObject item = artItems.optJSONObject(i);
                 if (i % cols == 0) {
                     row = horizontal(Gravity.TOP);
                     body.addView(row, lpm(0, 0, 0, 8));
                 }
                 FrameLayout tile = new FrameLayout(this);
-                boolean locked = genLocks.get(i);
-                tile.setBackground(Design.ruled(this, Design.CARD(), locked ? Design.ACCENT() : Design.INK(), locked ? 2.5f : 1.5f));
+                tile.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
                 ImageView iv = new ImageView(this);
                 iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                if (i < genPreviews.size() && genPreviews.get(i) != null) iv.setImageBitmap(genPreviews.get(i));
+                if (i < artPreviews.size() && artPreviews.get(i) != null) iv.setImageBitmap(artPreviews.get(i));
                 FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(-1, -1);
                 int bb = dp(3);
                 ilp.setMargins(bb, bb, bb, bb);
                 tile.addView(iv, ilp);
-                TextView tag = Design.pill(this, String.format(Locale.US, "%02d", i + 1),
-                        locked ? Design.PILL_MINE : Design.PILL_DONE);
+                TextView tag = Design.pill(this, String.format(Locale.US, "%02d", i + 1), Design.PILL_DONE);
                 FrameLayout.LayoutParams tagLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
                 tagLp.setMargins(dp(5), 0, 0, dp(5));
                 tile.addView(tag, tagLp);
                 tile.setClickable(true);
-                tile.setOnClickListener(v -> {
-                    genLocks.set(gi, !genLocks.get(gi));
-                    renderGenerative();
-                });
+                tile.setOnClickListener(v -> showArtItem(item, gi));
                 LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, dp(104), 1);
                 if (i % cols != 0) tlp.leftMargin = dp(8);
                 row.addView(tile, tlp);
             }
-            int rem = genCombos.size() % cols;
+            int rem = artItems.length() % cols;
             if (rem != 0 && row != null) {
                 for (int i = 0; i < cols - rem; i++) {
                     row.addView(new Space(this), new LinearLayout.LayoutParams(0, 1, 1){{ leftMargin = dp(8); }});
@@ -2012,74 +2095,171 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             }
             TextView use = Design.button(this, genBusy ? "Composing…" : "Send to collection wizard", true);
             use.setEnabled(!genBusy);
-            use.setOnClickListener(v -> sendGenerativeToCollection(model));
+            use.setOnClickListener(v -> sendArtToCollection());
             body.addView(use, lph(52, 0, 12, 0, 8));
         }
     }
 
-    private void clearGenPreviews() {
-        genCombos.clear();
-        genLocks.clear();
-        genPreviews.clear();
+    private String pctText(JSONObject variant, int weightTotal) {
+        if (!variant.optBoolean("on", true) || weightTotal <= 0) return "0%";
+        return (Math.round(variant.optInt("weight", 0) * 1000f / weightTotal) / 10f) + "%";
     }
 
-    private void generateCombos(JSONObject model) {
-        int count = Math.max(2, Math.min(20, parseIntSafe(genCount)));
-        genCount = String.valueOf(count);
-        List<int[]> keep = new ArrayList<>();
-        for (int i = 0; i < genCombos.size() && i < genLocks.size(); i++) {
-            if (genLocks.get(i)) keep.add(genCombos.get(i));
-        }
-        if (keep.size() > count) keep = keep.subList(0, count);
-        List<int[]> sampled = GenerativeComposer.sample(model, count, keep, new java.util.Random());
-        if (sampled == null) {
-            toast("The stack cannot yield " + count + " unique editions — add variants or lower the count");
-            return;
-        }
-        genCombos.clear();
-        genCombos.addAll(sampled);
-        genLocks.clear();
-        for (int i = 0; i < genCombos.size(); i++) genLocks.add(i < keep.size());
-        genPreviews.clear();
-        for (int i = 0; i < genCombos.size(); i++) genPreviews.add(null);
-        renderGenerative();
-        new Thread(() -> {
-            for (int i = 0; i < genCombos.size(); i++) {
-                android.graphics.Bitmap b = GenerativeComposer.compose(this, model, genCombos.get(i), 216);
-                final int idx = i;
-                runOnUiThread(() -> {
-                    if (idx < genPreviews.size()) genPreviews.set(idx, b);
-                    if (screen == Screen.CREATE_GENERATIVE && idx == genCombos.size() - 1) renderGenerative();
-                });
+    private void artShuffle(JSONObject cfg, boolean pool) {
+        java.util.Random r = new java.util.Random();
+        JSONArray slots = cfg.optJSONArray("slots");
+        if (slots == null) return;
+        for (int i = 0; i < slots.length(); i++) {
+            JSONArray vs = slots.optJSONObject(i) == null ? null : slots.optJSONObject(i).optJSONArray("variants");
+            if (vs == null) continue;
+            int on = 0;
+            for (int k = 0; k < vs.length(); k++) {
+                JSONObject v2 = vs.optJSONObject(k);
+                if (v2 == null) continue;
+                if (pool) { put(v2, "on", r.nextFloat() > 0.35f); }
+                if (v2.optBoolean("on", true)) { put(v2, "weight", 1 + r.nextInt(99)); on++; }
             }
-        }).start();
+            if (pool) while (on < Math.min(2, vs.length())) {
+                JSONObject v2 = vs.optJSONObject(r.nextInt(vs.length()));
+                if (v2 != null && !v2.optBoolean("on", true)) { put(v2, "on", true); put(v2, "weight", 1 + r.nextInt(99)); on++; }
+            }
+        }
+        artItems = new JSONArray();
+        artPreviews.clear();
+        artSaveDraft();
+        renderGenerative();
+        toast(pool ? "Trait pool shuffled" : "Rarity shuffled");
     }
 
-    private void sendGenerativeToCollection(JSONObject model) {
-        if (genCombos.isEmpty() || genBusy) return;
+    private void artGenerate(ArtStudio studio, JSONObject cfg) {
+        int n = Math.max(2, Math.min(20, parseIntSafe(genCount)));
+        genCount = String.valueOf(n);
         genBusy = true;
         renderGenerative();
-        new Thread(() -> {
-            String[] images = new String[genCombos.size()];
-            JSONObject traitsMap = new JSONObject();
-            boolean ok = true;
-            for (int i = 0; i < genCombos.size(); i++) {
-                images[i] = GenerativeComposer.composeB64(this, model, genCombos.get(i), ImageTools.STATE_IMG_BUDGET);
-                if (images[i].isEmpty()) { ok = false; break; }
-                put(traitsMap, String.valueOf(i + 1), GenerativeComposer.traitsFor(model, genCombos.get(i)));
+        String s = artSeed.isEmpty() ? "atelier" : artSeed;
+        studio.generate(s, n, cfg, result -> {
+            genBusy = false;
+            if (screen != Screen.CREATE_GENERATIVE) return;
+            String err = result.optString("error", "");
+            JSONArray items = result.optJSONArray("items");
+            if (items == null) items = new JSONArray();
+            if (!err.isEmpty() && items.length() < n) {
+                toast(err);
             }
-            final boolean okF = ok;
+            artItems = items;
+            artPreviews.clear();
+            for (int i = 0; i < items.length(); i++) artPreviews.add(null);
+            renderGenerative();
+            final JSONArray itemsF = items;
+            new Thread(() -> {
+                for (int i = 0; i < itemsF.length(); i++) {
+                    JSONObject it = itemsF.optJSONObject(i);
+                    android.graphics.Bitmap b = it == null ? null
+                            : ArtStudio.svgBitmap(it.optString("svg"), dp(160));
+                    final int idx = i;
+                    runOnUiThread(() -> {
+                        if (artItems == itemsF && idx < artPreviews.size()) {
+                            artPreviews.set(idx, b);
+                            if (screen == Screen.CREATE_GENERATIVE && idx == itemsF.length() - 1) renderGenerative();
+                        }
+                    });
+                }
+            }).start();
+        });
+    }
+
+    private void showArtItem(JSONObject item, int idx) {
+        if (item == null) return;
+        StringBuilder sb = new StringBuilder();
+        JSONArray ts = item.optJSONArray("traits");
+        if (ts != null) for (int i = 0; i < ts.length(); i++) {
+            JSONObject t = ts.optJSONObject(i);
+            if (t == null) continue;
+            sb.append(t.optString("label")).append(":  ").append(t.optString("value"))
+              .append("   (").append(t.optString("pct")).append("%)\n");
+        }
+        sb.append("\nrarity score r").append(item.opt("score"))
+          .append(" · ").append(item.optInt("bytes")).append("B raw");
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Plate " + String.format(Locale.US, "%02d", idx + 1))
+                .setMessage(sb.toString())
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void sendArtToCollection() {
+        if (artItems.length() == 0 || genBusy) return;
+        genBusy = true;
+        renderGenerative();
+        final JSONArray itemsF = artItems;
+        new Thread(() -> {
+            String[] images = new String[itemsF.length()];
+            JSONObject traitsMap = new JSONObject();
+            String err = "";
+            for (int i = 0; i < itemsF.length(); i++) {
+                JSONObject it = itemsF.optJSONObject(i);
+                String svg = it == null ? "" : SvgSanitizer.sanitize(it.optString("svg"));
+                String b64 = svg.isEmpty() ? "" : java.util.Base64.getEncoder()
+                        .encodeToString(svg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                if (b64.isEmpty() || b64.length() > ART_EMBED_BUDGET) {
+                    err = "Plate " + (i + 1) + " will not fit the on-chain budget";
+                    break;
+                }
+                images[i] = b64;
+                JSONArray attrs = new JSONArray();
+                JSONArray ts = it.optJSONArray("traits");
+                if (ts != null) for (int k = 0; k < ts.length(); k++) {
+                    JSONObject t = ts.optJSONObject(k);
+                    if (t == null) continue;
+                    JSONObject a = new JSONObject();
+                    put(a, "trait_type", t.optString("label"));
+                    put(a, "value", t.optString("value"));
+                    attrs.put(a);
+                }
+                put(traitsMap, String.valueOf(i + 1), attrs);
+            }
+            final String errF = err;
             runOnUiThread(() -> {
                 genBusy = false;
-                if (!okF) { toast("Composition failed — a plate would not fit the on-chain budget"); renderGenerative(); return; }
+                if (!errF.isEmpty()) { toast(errF); renderGenerative(); return; }
                 createMode = "embed";
                 createSize = String.valueOf(images.length);
                 createImages = images;
                 collectionItemTraits = traitsMap;
-                toast(images.length + " editions composed — finish the collection details");
+                toast(images.length + " editions drawn — finish the collection details");
                 renderCreateCollection();
             });
         }).start();
+    }
+
+    /* ---- studio draft: style + seed + edited configs survive restarts ---- */
+
+    private void artLoadDraft() {
+        JSONObject d = LocalStore.loadDraft(this, "artstudio");
+        if (d == null) return;
+        artStyle = d.optString("style", artStyle);
+        artSeed = d.optString("seed", artSeed);
+        genCount = d.optString("count", genCount);
+        JSONObject cfgs = d.optJSONObject("cfgs");
+        if (cfgs != null) {
+            java.util.Iterator<String> it = cfgs.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                JSONObject c2 = cfgs.optJSONObject(k);
+                if (c2 != null) artCfgs.put(k, c2);
+            }
+        }
+    }
+
+    private void artSaveDraft() {
+        JSONObject d = new JSONObject();
+        put(d, "style", artStyle);
+        put(d, "seed", artSeed);
+        put(d, "count", genCount);
+        JSONObject cfgs = new JSONObject();
+        for (java.util.Map.Entry<String, JSONObject> e : artCfgs.entrySet()) put(cfgs, e.getKey(), e.getValue());
+        put(d, "cfgs", cfgs);
+        LocalStore.saveDraft(this, "artstudio", d);
     }
 
     /* ================= AIRDROP ================= */
@@ -2752,14 +2932,6 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         if (requestCode != 7001 || resultCode != RESULT_OK || data == null) return;
         ArrayList<Uri> uris = selectedImageUris(data);
         if (uris.isEmpty()) return;
-        if (pendingPickContext == PICK_GEN) {
-            int layerIdx = pendingGenLayer;
-            pendingGenLayer = -1;
-            pendingPickContext = PICK_CREATE;
-            pendingBatchImages = false;
-            addGenVariants(layerIdx, uris);
-            return;
-        }
         int start = pendingBatchImages ? firstEmptyImageSlot() : pendingImageIndex;
         boolean batch = pendingBatchImages;
         int context = pendingPickContext;
@@ -2823,50 +2995,6 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         }).start();
     }
 
-    private void addGenVariants(int layerIdx, ArrayList<Uri> uris) {
-        new Thread(() -> {
-            JSONObject model = GenerativeComposer.load(this);
-            JSONArray layers = GenerativeComposer.layers(model);
-            JSONObject layer = layerIdx >= 0 && layerIdx < layers.length() ? layers.optJSONObject(layerIdx) : null;
-            if (layer == null) return;
-            JSONArray vs = layer.optJSONArray("variants");
-            if (vs == null) { vs = new JSONArray(); put(layer, "variants", vs); }
-            int added = 0;
-            for (Uri uri : uris) {
-                if (vs.length() >= 12) break;
-                String file = GenerativeComposer.addVariantImage(this, uri);
-                if (file == null) continue;
-                JSONObject variant = new JSONObject();
-                put(variant, "name", displayName(uri, "V" + (vs.length() + 1)));
-                put(variant, "file", file);
-                put(variant, "weight", 30);
-                vs.put(variant);
-                added++;
-            }
-            GenerativeComposer.save(this, model);
-            final int addedF = added;
-            runOnUiThread(() -> {
-                clearGenPreviews();
-                toast(addedF == 0 ? "Could not process those images" : addedF + " variants added");
-                if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
-            });
-        }).start();
-    }
-
-    private String displayName(Uri uri, String fallback) {
-        try (android.database.Cursor cur = getContentResolver().query(uri,
-                new String[]{ android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
-            if (cur != null && cur.moveToFirst()) {
-                String n = cur.getString(0);
-                if (n != null && !n.isEmpty()) {
-                    int dot = n.lastIndexOf('.');
-                    if (dot > 0) n = n.substring(0, dot);
-                    return n.replace('_', ' ').replace('-', ' ').trim();
-                }
-            }
-        } catch (Throwable ignored) {}
-        return fallback;
-    }
 
     private ArrayList<Uri> selectedImageUris(Intent data) {
         ArrayList<Uri> uris = new ArrayList<>();
