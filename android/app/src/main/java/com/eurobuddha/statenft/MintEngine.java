@@ -427,20 +427,18 @@ public final class MintEngine {
 
     public interface CoinsBounded { void ok(JSONArray coins, boolean partial); }
 
-    /** Coin query that survives the 256KB IPC cap: full query first, then a
-     *  depth-halving ladder (4096 → 64 blocks from tip) delivering the newest
-     *  window when a big embed collection's states blow the reply limit.
-     *  partial=true means older coins may be missing — callers must not treat
-     *  absence as proof. (Family rule: bounded paging, adaptive halving.) */
+    /** Coin query that survives the 256KB IPC cap. Fast path: one plain
+     *  query. When the reply blows the cap (each coin drags the FULL token
+     *  metadata — a 20-item embed collection is ~380KB), fall back to a
+     *  complete PAGED SWEEP over [coinage, depth] age windows: adaptive
+     *  spans halve on overflow down to single blocks and double on success,
+     *  accumulating every coin de-duplicated by coinid. partial=true only
+     *  when a single-block window itself exceeded the cap (skipped) or the
+     *  sweep was cut short — callers must not treat absence as proof then.
+     *  (Family rule: bounded paging, adaptive halving.) */
     public static void tokenCoinsBounded(NodeApi node, String tid, boolean relevant,
                                          CoinsBounded ok, java.util.function.Consumer<String> fail) {
-        tryCoinsDepth(node, tid, relevant, 0, ok, fail);
-    }
-
-    private static void tryCoinsDepth(NodeApi node, String tid, boolean relevant, int depth,
-                                      CoinsBounded ok, java.util.function.Consumer<String> fail) {
-        String command = "coins " + (relevant ? "relevant:true " : "") + "tokenid:" + tid
-                + (depth > 0 ? " depth:" + depth : "");
+        String command = "coins " + (relevant ? "relevant:true " : "") + "tokenid:" + tid;
         node.cmd(command, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 if (!json.optBoolean("status", false)) {
@@ -448,16 +446,73 @@ public final class MintEngine {
                     return;
                 }
                 JSONArray arr = json.optJSONArray("response");
-                ok.ok(arr == null ? new JSONArray() : arr, depth > 0);
+                ok.ok(arr == null ? new JSONArray() : arr, false);
+            }
+            @Override public void onError(String message) {
+                if (NodeApi.ERR_TOO_LONG.equals(message)) { pagedSweep(node, tid, relevant, ok, fail); return; }
+                fail.accept(message);
+            }
+        });
+    }
+
+    private static void pagedSweep(NodeApi node, String tid, boolean relevant,
+                                   CoinsBounded ok, java.util.function.Consumer<String> fail) {
+        node.cmd("block", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject r = json.optJSONObject("response");
+                int tip = r == null ? 0 : r.optInt("block", 0);
+                if (tip <= 0) { fail.accept("block height unavailable for paged coin sweep"); return; }
+                sweepWindow(node, tid, relevant, tip, 0, 512,
+                        new java.util.LinkedHashMap<>(), new int[]{0}, new boolean[]{false}, ok);
+            }
+            @Override public void onError(String message) { fail.accept(message); }
+        });
+    }
+
+    private static void sweepWindow(NodeApi node, String tid, boolean relevant, int tip,
+                                    int from, int span,
+                                    java.util.LinkedHashMap<String, JSONObject> acc,
+                                    int[] requests, boolean[] partial, CoinsBounded ok) {
+        if (from > tip || requests[0] >= 80) {
+            if (from <= tip) partial[0] = true;   // request budget cut the sweep short
+            JSONArray out = new JSONArray();
+            for (JSONObject c : acc.values()) out.put(c);
+            ok.ok(out, partial[0]);
+            return;
+        }
+        int to = Math.min(from + span, tip + 10);
+        requests[0]++;
+        String command = "coins " + (relevant ? "relevant:true " : "") + "tokenid:" + tid
+                + " coinage:" + from + " depth:" + to;
+        node.cmd(command, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONArray arr = json.optBoolean("status", false) ? json.optJSONArray("response") : null;
+                if (arr != null) {
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject c = arr.optJSONObject(i);
+                        if (c != null) acc.put(c.optString("coinid"), c);
+                    }
+                }
+                sweepWindow(node, tid, relevant, tip, to, Math.min(span * 2, 262144),
+                        acc, requests, partial, ok);
             }
             @Override public void onError(String message) {
                 if (NodeApi.ERR_TOO_LONG.equals(message)) {
-                    int next = depth == 0 ? 4096 : depth / 2;
-                    if (next >= 64) { tryCoinsDepth(node, tid, relevant, next, ok, fail); return; }
-                    fail.accept("coin list exceeds the node link even at minimum depth");
+                    if (span <= 1) {
+                        // one single block alone exceeds the cap — skip it honestly
+                        partial[0] = true;
+                        sweepWindow(node, tid, relevant, tip, from + 1, 64, acc, requests, partial, ok);
+                    } else {
+                        sweepWindow(node, tid, relevant, tip, from, Math.max(1, span / 2),
+                                acc, requests, partial, ok);
+                    }
                     return;
                 }
-                fail.accept(message);
+                // non-cap error mid-sweep: deliver what we have, flagged partial
+                partial[0] = true;
+                JSONArray out = new JSONArray();
+                for (JSONObject c : acc.values()) out.put(c);
+                ok.ok(out, true);
             }
         });
     }
