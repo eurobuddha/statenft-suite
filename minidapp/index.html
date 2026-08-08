@@ -355,6 +355,7 @@
     <div id="gallery" class="gallery"></div>
 
     <div id="danger-row" class="danger-row hidden">
+      <button id="sendall-btn" class="btn btn-ghost hidden">Send collection&hellip;</button>
       <button id="bury-btn" class="btn btn-ember hidden">Bury collection&hellip;</button>
       <button id="remove-btn" class="btn btn-ember hidden">Remove from list</button>
     </div>
@@ -449,6 +450,25 @@
       <p id="lot-heldnote" class="cert-note hidden">held in another collection</p>
     </div>
   </aside>
+</div>
+
+<!-- send whole collection modal -->
+<div id="sendall-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <p class="modal-kicker">Dispatch</p>
+    <h2 class="modal-title">Send the whole collection</h2>
+    <p id="sendall-count" class="bury-line"></p>
+    <p class="cert-note">A single transaction cannot carry more than one sealed
+      identity &mdash; the collection travels as one identity-preserving
+      transfer per lot, posted in sequence. Re-run to resume if interrupted.</p>
+    <label class="flabel" for="sendall-recipient">Recipient address (0x or Mx)</label>
+    <input id="sendall-recipient" type="text" spellcheck="false" placeholder="Mx&hellip; / 0x&hellip;" />
+    <div class="modal-actions">
+      <button id="sendall-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="sendall-go" class="btn btn-gold">Send all lots</button>
+    </div>
+    <p id="sendall-status" class="modal-status"></p>
+  </div>
 </div>
 
 <!-- transfer modal -->

@@ -935,7 +935,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             List<StateNft.Item> transferable = new ArrayList<>();
             for (StateNft.Item it : shown) if (it.owned && it.coin != null && StateNft.stamped(it.coin) != null) transferable.add(it);
             if (!transferable.isEmpty()) {
-                TextView drop = Design.button(this, "Airdrop " + transferable.size() + " lots to a list", false);
+                TextView drop = Design.button(this, "Send " + transferable.size() + " lots — one address or a list", false);
                 drop.setOnClickListener(v -> renderAirdrop(m, transferable));
                 body.addView(drop, lph(46, 0, 0, 0, 14));
             }
@@ -2048,6 +2048,33 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
         body.addView(Design.lot(this, "Dispatch — " + transferable.size() + " lots in custody"));
         body.addView(Design.display(this, m.name, 18), lpm(0, 4, 0, 10));
+
+        /* the whole collection to ONE address — a single txn is impossible
+         * on-chain (state is per-transaction), so this queues one identity-
+         * preserving transfer per lot through the resumable engine */
+        LinearLayout wholeCard = lotCard();
+        wholeCard.addView(Design.lot(this, "Send the whole collection"));
+        wholeCard.addView(Design.note(this, "All " + transferable.size() + " lots to one recipient — "
+                + "delivered as " + transferable.size() + " sealed transfers, one per coin, resumable."), lpm(0, 4, 0, 8));
+        EditText oneAddr = input("Mx… or 0x…");
+        wholeCard.addView(oneAddr, lph(48, 0, 0, 0, 8));
+        TextView sendAll = Design.button(this, "Send all " + transferable.size() + " lots", true);
+        sendAll.setOnClickListener(v -> {
+            String a = oneAddr.getText().toString().trim().replace(" ", "");
+            if (!Util.isValidAddress(a)) { toast("That address does not parse — Mx… or 0x… format"); return; }
+            List<String> addrs = new ArrayList<>();
+            for (int i = 0; i < transferable.size(); i++) addrs.add(a);
+            JSONObject job = AirdropEngine.createJob(m, transferable, addrs);
+            if (AirdropEngine.progress(job)[1] == 0) { toast("Nothing deliverable"); return; }
+            AirdropEngine.saveJob(this, job);
+            engageEngine();
+            toast(transferable.size() + " lots queued to " + Util.shorten(a));
+            openCollection(m);
+        });
+        wholeCard.addView(sendAll, lph(50, 0, 0, 0, 0));
+        body.addView(wholeCard, lpm(0, 0, 0, 16));
+
+        body.addView(sectionHead("Or map lots to a list", ""));
         body.addView(Design.note(this, "One address per line. Lots are delivered in order — lot " +
                 (transferable.isEmpty() ? "—" : String.format(Locale.US, "%03d", transferable.get(0).index)) +
                 " to the first line. Every transfer replays the sealed identity."), lpm(0, 0, 0, 10));

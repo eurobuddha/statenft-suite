@@ -642,6 +642,7 @@ function renderCards(coins, mineIds) {
   var burying = OPEN_ROW && OPEN_ROW.PHASE === "BURY";
   $("danger-row").classList.toggle("hidden", !OPEN_ROW || burying);
   $("bury-btn").classList.toggle("hidden", !(rawMine > 0));
+  $("sendall-btn").classList.toggle("hidden", !(rawMine > 0));
   $("remove-btn").classList.toggle("hidden", rawMine > 0);
   $("holdings").classList.remove("hidden");
   var line = "No. " + counts.mine + " of " + size + " in this wallet";
@@ -1889,3 +1890,95 @@ function tokenRowEl(row) {
   el.querySelector(".chip-hash").onclick = function () { copyText(row.tokenid, this); };
   return el;
 }
+
+/* ---------- send the whole collection (N sealed transfers) ---------- */
+
+function transferCoinSealed(coin, to, id, ok, fail) {
+  var st = coin.state || [];
+  for (var si = 0; si < st.length; si++) {
+    if (!/^[0-9]+$/.test("" + st[si].port) || !engineSafeStateValue(st[si].data)) {
+      fail("malformed state on coin " + shortHash(coin.coinid)); return;
+    }
+  }
+  var states = st.map(function (sv) {
+    return "txnstate id:" + id + " port:" + sv.port + " value:" + sv.data;
+  });
+  var bail = function (e) { MDS.cmd("txndelete id:" + id, function () {}); fail(e); };
+  step("txncreate id:" + id, function () {
+    step("txninput id:" + id + " coinid:" + coin.coinid, function () {
+      step("txnoutput id:" + id + " amount:1 address:" + to +
+           " tokenid:" + TOKENID + " storestate:true", function () {
+        (function setState(k) {
+          if (k >= states.length) {
+            step("txnsign id:" + id + " publickey:auto", function () {
+              step("txnbasics id:" + id, function () {
+                step("txnpost id:" + id, function () {
+                  MDS.cmd("txndelete id:" + id, function () {});
+                  ok();
+                }, bail);
+              }, bail);
+            }, bail);
+            return;
+          }
+          step(states[k], function () { setState(k + 1); }, bail);
+        })(0);
+      }, bail);
+    }, bail);
+  }, bail);
+}
+
+function openSendAll() {
+  if (!LAST) { return; }
+  var coins = [];
+  Object.keys(LAST.byIdx).forEach(function (ix) {
+    var c = LAST.byIdx[ix];
+    if (c && LAST.mineIds[c.coinid]) { coins.push(c); }
+  });
+  if (!coins.length) { toast("no owned lots to send"); return; }
+  $("sendall-count").innerText = coins.length + " sealed lot" +
+    (coins.length === 1 ? "" : "s") + " in this wallet will be dispatched.";
+  $("sendall-status").innerText = "";
+  $("sendall-backdrop").classList.remove("hidden");
+}
+
+function sendAllGo() {
+  var to = $("sendall-recipient").value.trim().replace(/ /g, "");
+  var status = $("sendall-status");
+  if (!(to.indexOf("0x") === 0 || to.indexOf("Mx") === 0)) {
+    status.innerText = "invalid address"; return;
+  }
+  var coins = [];
+  Object.keys(LAST.byIdx).forEach(function (ix) {
+    var c = LAST.byIdx[ix];
+    if (c && LAST.mineIds[c.coinid]) { coins.push(c); }
+  });
+  $("sendall-go").disabled = true;
+  (function sendNext(i, sent) {
+    if (i >= coins.length) {
+      status.innerText = sent + " transfer" + (sent === 1 ? "" : "s") +
+        " posted — lots depart as each confirms.";
+      $("sendall-go").disabled = false;
+      toast(sent + " lots dispatched to " + shortHash(to));
+      setTimeout(function () {
+        $("sendall-backdrop").classList.add("hidden");
+        renderGallery();
+      }, 1600);
+      return;
+    }
+    status.innerText = "sending lot " + (i + 1) + " of " + coins.length + "…";
+    transferCoinSealed(coins[i], to, "sendall" + Date.now() + "x" + i,
+      function () { sendNext(i + 1, sent + 1); },
+      function (e) {
+        status.innerText = "stopped at lot " + (i + 1) + ": " + e + " — " +
+          sent + " already posted; re-run to resume.";
+        $("sendall-go").disabled = false;
+      });
+  })(0, 0);
+}
+
+$("sendall-btn").onclick = openSendAll;
+$("sendall-cancel").onclick = function () { $("sendall-backdrop").classList.add("hidden"); };
+$("sendall-go").onclick = sendAllGo;
+$("sendall-backdrop").addEventListener("click", function (e) {
+  if (e.target === this) { this.classList.add("hidden"); }
+});
