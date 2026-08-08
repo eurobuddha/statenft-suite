@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atelier</title>
-<link rel="stylesheet" href="styles.css?v=407">
-<script type="text/javascript" src="mds.js?v=407"></script>
-<script type="text/javascript" src="sanitize.js?v=407"></script>
-<script type="text/javascript" src="engine.js?v=407"></script>
+<link rel="stylesheet" href="styles.css?v=410">
+<script type="text/javascript" src="mds.js?v=410"></script>
+<script type="text/javascript" src="sanitize.js?v=410"></script>
+<script type="text/javascript" src="engine.js?v=410"></script>
+<script type="text/javascript" src="art.js?v=410"></script>
+<script type="text/javascript" src="sendall.js?v=410"></script>
 </head>
 <body>
 <div class="beam"></div>
@@ -74,6 +76,12 @@
         <p class="wizard-kick">&numero; 3</p>
         <h3>Custom Token</h3>
         <p>A fungible token &mdash; name, ticker, supply, decimals, icon.</p>
+      </div>
+      <div class="studio-card" id="hub-art">
+        <p class="wizard-kick">&numero; 4 &middot; Generative</p>
+        <h3>Generative Collection</h3>
+        <p>18 on-chain SVG style packs &mdash; design, preview and mint a sealed
+           StateNFT collection drawn from a seed.</p>
       </div>
     </div>
 
@@ -253,6 +261,82 @@
       <p id="create-status" class="modal-status"></p>
     </div>
     </div><!-- /wiz-collection -->
+
+    <!-- № 4 · generative collection wizard -->
+    <div id="wiz-art" class="hidden">
+    <div class="wizard">
+      <p class="wizard-kick">&numero; 4 &middot; Generative Collection</p>
+      <h2 class="wizard-title">The Generator</h2>
+
+      <div class="art-studio">
+        <div>
+          <span class="flabel">Style &mdash; 18 on-chain SVG packs</span>
+          <div id="art-style-picker" class="style-picker"></div>
+          <span class="flabel" style="margin-top:1rem">Collection seed &mdash; same seed always reproduces the same art</span>
+          <div class="seed-row">
+            <input id="art-seed" type="text" value="atelier-genesis" spellcheck="false"/>
+            <button id="art-reseed" class="dice" title="random seed">&#127922;</button>
+          </div>
+          <span class="flabel" style="margin-top:1rem">Trait pool &amp; rarity</span>
+          <div id="art-slots"></div>
+          <div id="art-capacity" class="capacity"></div>
+          <div class="toolbar" style="margin-top:0.6rem">
+            <button id="art-shuffle-rarity" class="btn btn-ghost"
+                    title="random weight for every enabled variant">&#127922; Rarity</button>
+            <button id="art-shuffle-pool" class="btn btn-ghost"
+                    title="random on/off + weights (keeps at least 2 per slot)">&#127922; Traits</button>
+            <button id="art-reset-weights" class="btn btn-ghost">Reset</button>
+          </div>
+        </div>
+        <div>
+          <div class="toolbar">
+            <button id="art-regen" class="btn btn-ghost">Redraw</button>
+            <span class="note">show first
+              <input id="art-pv-n" type="number" min="4" max="20" value="12" class="pv-n"/>
+              &mdash; click any to inspect</span>
+            <span class="note" id="art-pv-stats"></span>
+          </div>
+          <div id="art-preview-grid" class="art-grid"></div>
+        </div>
+      </div>
+
+      <div class="field-grid" style="margin-top:1.2rem">
+        <label>Name
+          <input id="g-name" type="text" maxlength="64" placeholder="My Generated Collection" />
+        </label>
+        <label>Items (2&ndash;20)
+          <input id="g-size" type="number" min="2" max="20" value="8" />
+        </label>
+        <label class="field-wide">Description
+          <input id="g-desc" type="text" maxlength="256" placeholder="optional" />
+        </label>
+        <label>Wallet icon &mdash; item &numero;
+          <input id="g-iconitem" type="number" min="1" max="20" value="1"
+                 title="embed this item as the wallet icon" />
+        </label>
+        <label>Icon URL &mdash; overrides
+          <input id="g-iconurl" type="text" maxlength="512" placeholder="optional https://&hellip;" />
+        </label>
+        <label class="field-wide">External URL
+          <input id="g-externalurl" type="text" maxlength="512" placeholder="optional https://&hellip;" />
+        </label>
+        <label class="field-wide">Web validation URL
+          <input id="g-webvalidate" type="text" maxlength="512" placeholder="optional https://&hellip;/proof.txt" />
+        </label>
+      </div>
+      <p id="g-budget" class="budget"></p>
+      <div class="wizard-actions">
+        <button id="art-hub-back" class="btn btn-ghost">&larr; Studio</button>
+        <button id="g-export-btn" class="btn btn-ghost">Export .zip</button>
+        <button id="g-mint-btn" class="btn btn-gold">Mint collection</button>
+      </div>
+      <p class="cert-note" style="margin-top:0.8rem">Deterministic: the seed and
+        style reproduce every item byte-for-byte. Minting uses the proven
+        StateNFT engine &mdash; each coin sealed with its index and full SVG,
+        immutable once stamped. Runs in the background service.</p>
+      <p id="g-status" class="modal-status"></p>
+    </div>
+    </div><!-- /wiz-art -->
   </section>
 
   <!-- ============ DETAIL : Catalogue Raisonné ============ -->
@@ -364,6 +448,7 @@
 
 <footer class="colophon">
   <span>identities enforced by KISS&nbsp;VM token script</span>
+  <span id="app-version" class="mono">Atelier v4.1.0</span>
 </footer>
 
 <!-- burial modal -->
@@ -487,8 +572,26 @@
   </div>
 </div>
 
+<!-- generative trait inspector -->
+<div id="art-insp-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <p class="modal-kicker">Generative &middot; Item</p>
+    <h2 id="art-insp-title" class="modal-title">&mdash;</h2>
+    <p id="art-insp-sub" class="cert-note"></p>
+    <div class="art-insp-grid">
+      <div id="art-insp-art" class="art-insp-art"></div>
+      <table id="art-insp-traits" class="trait-table"></table>
+    </div>
+    <div class="modal-actions">
+      <button id="art-insp-dl" class="btn btn-ghost">Download SVG</button>
+      <button id="art-insp-close" class="btn btn-gold">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
-<script type="text/javascript" src="app.js?v=407"></script>
+<script type="text/javascript" src="app.js?v=410"></script>
+<script type="text/javascript" src="art-studio.js?v=410"></script>
 </body>
 </html>

@@ -23,8 +23,50 @@ echo "== engine (coin state, contract shape, adoption fingerprint)"
 node test/engine.test.js || fail=1
 echo
 
+echo "== generative art (18 packs: determinism, uniqueness, byte budget)"
+node test/art.test.js || fail=1
+echo
+
+echo "== send queue (pure planners)"
+node test/sendall.test.js || fail=1
+echo
+
+echo "== art studio (stub DOM: bindings + index.html id cross-check)"
+node test/art-studio.test.js || fail=1
+echo
+
 echo "== cli (bury / transfer / mint parity)"
 python3 test/test_cli.py || fail=1
+echo
+
+echo "== artimage close-tag ownership"
+# The engine must only ever write the OPEN <artimage> tag — the page appends
+# </artimage> itself; if engine.js started closing it, icons would double-close.
+if grep -q '</artimage>' minidapp/engine.js; then
+  echo "  FAIL  engine.js writes </artimage> — the page owns the closing tag"
+  fail=1
+else
+  echo "  ok    engine writes open tag; the page owns the closing tag"
+fi
+echo
+
+echo "== version + cache-busters (dapp.conf / index.html / footer agree)"
+VER=$(python3 -c "import json;print(json.load(open('minidapp/dapp.conf'))['version'])")
+BUST=$(echo "$VER" | tr -d '.')
+NTAG=$(grep -c "?v=" minidapp/index.html)
+NGOOD=$(grep -c "?v=$BUST" minidapp/index.html)
+if [ "$NTAG" -ne "$NGOOD" ] || [ "$NTAG" -eq 0 ]; then
+  echo "  FAIL  dapp.conf $VER wants ?v=$BUST on every tag; $NGOOD of $NTAG match"
+  fail=1
+else
+  echo "  ok    all $NTAG script/css tags carry ?v=$BUST (dapp.conf $VER)"
+fi
+if grep -q "Atelier v$VER" minidapp/index.html; then
+  echo "  ok    footer version stamp reads Atelier v$VER"
+else
+  echo "  FAIL  footer version stamp does not read Atelier v$VER"
+  fail=1
+fi
 echo
 
 if [ "$fail" -eq 0 ]; then

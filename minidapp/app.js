@@ -1198,7 +1198,10 @@ function mintCollection() {
   var base = $("c-base").value.trim();
   var ext = $("c-ext").value.trim() || ".png";
   var iconurl = $("c-iconurl").value.trim();
-  var icon = iconurl || WIZ_ICON;   // hosted URL beats upload (URLs can animate)
+  /* hosted URL beats upload (URLs can animate). Embedded icons carry a CLOSED
+   * </artimage> — the engine prepends only the open tag, and strict-XML wallet
+   * parsers need the well-formed element. WIZ_ICON itself stays raw b64. */
+  var icon = iconurl || (WIZ_ICON ? WIZ_ICON + "</artimage>" : "");
   var webvalidate = $("c-webvalidate").value.trim();
   var externalurl = $("c-externalurl").value.trim();
   var status = $("create-status");
@@ -1226,7 +1229,7 @@ function mintCollection() {
     if (icon || mode !== "embed" || !WIZ_IMAGES[0]) { next(); return; }
     // no icon chosen: square-crop plate #1 so the wallet tile fills properly
     squareIconFromB64(WIZ_IMAGES[0], function (sq) {
-      if (sq) { icon = sq; }
+      if (sq) { icon = sq + "</artimage>"; }
       next();
     });
   }
@@ -1409,6 +1412,11 @@ function cleanupPhantomRows(done) {
 MDS.init(function (msg) {
   if (msg.event === "inited") {
     engineInitTables(function () {
+      artInitMetaTable(function () {
+        sendInitTable(function () {
+          artStudioBoot(function () {});
+        });
+      });
       cleanupPhantomRows(function () { loadCollectionList(); loadSingles(); });
     });
     MDS.cmd("block", function (res) {
@@ -1557,14 +1565,17 @@ function studioShow(panel) {
   $("wiz-collection").classList.toggle("hidden", panel !== "collection");
   $("wiz-nft").classList.toggle("hidden", panel !== "nft");
   $("wiz-token").classList.toggle("hidden", panel !== "token");
+  $("wiz-art").classList.toggle("hidden", panel !== "art");
 }
 
 $("hub-collection").onclick = function () { studioShow("collection"); };
 $("hub-nft").onclick = function () { studioShow("nft"); updateNftPreview(); };
 $("hub-token").onclick = function () { studioShow("token"); updateTokenPreview(); };
+$("hub-art").onclick = function () { studioShow("art"); artStudioEnter(); };
 $("coll-hub-back").onclick = function () { studioShow("hub"); };
 $("nft-hub-back").onclick = function () { studioShow("hub"); };
 $("token-hub-back").onclick = function () { studioShow("hub"); };
+$("art-hub-back").onclick = function () { studioShow("hub"); };
 /* entering the Studio tab always lands on the hub */
 $("tab-create").addEventListener("click", function () { studioShow("hub"); });
 $("tab-collections").addEventListener("click", function () { loadSingles(); });
@@ -1753,7 +1764,9 @@ function tokenIconValue(placeholder) {
   var url = $("t-iconurl").value.trim();
   if (url) { return url; }
   if (TOKEN_ICON) {
-    return placeholder ? "<artimage>" + TOKEN_ICON.length + " chars" : "<artimage>" + TOKEN_ICON;
+    /* closed element — strict-XML wallet parsers need </artimage> */
+    return placeholder ? "<artimage>" + TOKEN_ICON.length + " chars</artimage>"
+                       : "<artimage>" + TOKEN_ICON + "</artimage>";
   }
   return "";
 }
@@ -1891,41 +1904,10 @@ function tokenRowEl(row) {
   return el;
 }
 
-/* ---------- send the whole collection (N sealed transfers) ---------- */
-
-function transferCoinSealed(coin, to, id, ok, fail) {
-  var st = coin.state || [];
-  for (var si = 0; si < st.length; si++) {
-    if (!/^[0-9]+$/.test("" + st[si].port) || !engineSafeStateValue(st[si].data)) {
-      fail("malformed state on coin " + shortHash(coin.coinid)); return;
-    }
-  }
-  var states = st.map(function (sv) {
-    return "txnstate id:" + id + " port:" + sv.port + " value:" + sv.data;
-  });
-  var bail = function (e) { MDS.cmd("txndelete id:" + id, function () {}); fail(e); };
-  step("txncreate id:" + id, function () {
-    step("txninput id:" + id + " coinid:" + coin.coinid, function () {
-      step("txnoutput id:" + id + " amount:1 address:" + to +
-           " tokenid:" + TOKENID + " storestate:true", function () {
-        (function setState(k) {
-          if (k >= states.length) {
-            step("txnsign id:" + id + " publickey:auto", function () {
-              step("txnbasics id:" + id, function () {
-                step("txnpost id:" + id, function () {
-                  MDS.cmd("txndelete id:" + id, function () {});
-                  ok();
-                }, bail);
-              }, bail);
-            }, bail);
-            return;
-          }
-          step(states[k], function () { setState(k + 1); }, bail);
-        })(0);
-      }, bail);
-    }, bail);
-  }, bail);
-}
+/* ---------- send the whole collection (background queue) ----------
+ * The dispatch itself lives in sendall.js, driven block by block from
+ * service.js — it survives this page closing. Here we only enqueue and
+ * report the queue state. */
 
 function openSendAll() {
   if (!LAST) { return; }
@@ -1938,42 +1920,59 @@ function openSendAll() {
   $("sendall-count").innerText = coins.length + " sealed lot" +
     (coins.length === 1 ? "" : "s") + " in this wallet will be dispatched.";
   $("sendall-status").innerText = "";
+  $("sendall-go").disabled = false;
+  MDS.sql("SELECT * FROM send_queue WHERE tokenid='" + engineSqlEsc(TOKENID) +
+          "' ORDER BY id DESC LIMIT 1", function (res) {
+    var s = (res.rows && res.rows.length) ? res.rows[0] : null;
+    if (s && s.STATUS === "ACTIVE") {
+      $("sendall-status").innerText = "a send is already running — " +
+        coins.length + " lot(s) left, one departs per block.";
+      $("sendall-go").disabled = true;
+    } else if (s && s.STATUS === "ERROR") {
+      $("sendall-status").innerText = "last send errored: " + (s.ERROR || "?") +
+        " — you can start again.";
+    }
+  });
   $("sendall-backdrop").classList.remove("hidden");
 }
 
 function sendAllGo() {
   var to = $("sendall-recipient").value.trim().replace(/ /g, "");
   var status = $("sendall-status");
-  if (!(to.indexOf("0x") === 0 || to.indexOf("Mx") === 0)) {
-    status.innerText = "invalid address"; return;
+  if (!sendValidAddress(to)) {
+    status.innerText = "recipient must be a plain 0x… or Mx… address"; return;
   }
   var coins = [];
   Object.keys(LAST.byIdx).forEach(function (ix) {
     var c = LAST.byIdx[ix];
     if (c && LAST.mineIds[c.coinid]) { coins.push(c); }
   });
+  if (!coins.length) { status.innerText = "no owned lots to send"; return; }
   $("sendall-go").disabled = true;
-  (function sendNext(i, sent) {
-    if (i >= coins.length) {
-      status.innerText = sent + " transfer" + (sent === 1 ? "" : "s") +
-        " posted — lots depart as each confirms.";
-      $("sendall-go").disabled = false;
-      toast(sent + " lots dispatched to " + shortHash(to));
-      setTimeout(function () {
-        $("sendall-backdrop").classList.add("hidden");
-        renderGallery();
-      }, 1600);
+  MDS.sql("SELECT id FROM send_queue WHERE tokenid='" + engineSqlEsc(TOKENID) +
+          "' AND status='ACTIVE'", function (r) {
+    if (r.rows && r.rows.length) {
+      status.innerText = "a send is already running for this collection";
       return;
     }
-    status.innerText = "sending lot " + (i + 1) + " of " + coins.length + "…";
-    transferCoinSealed(coins[i], to, "sendall" + Date.now() + "x" + i,
-      function () { sendNext(i + 1, sent + 1); },
-      function (e) {
-        status.innerText = "stopped at lot " + (i + 1) + ": " + e + " — " +
-          sent + " already posted; re-run to resume.";
-        $("sendall-go").disabled = false;
-      });
-  })(0, 0);
+    MDS.cmd("block", function (b) {
+      var tip = b.status ? parseInt(b.response.block, 10) : 0;
+      MDS.sql("INSERT INTO send_queue (tokenid,recipient,total,status," +
+              "startedat) VALUES ('" + engineSqlEsc(TOKENID) + "','" + to +
+              "'," + coins.length + ",'ACTIVE'," + tip + ")",
+        function () {
+          MDS.comms.solo("send", function () {});
+          status.innerText = "";
+          toast("Sending " + coins.length + " lots in the background — one " +
+                "identity-preserving txn per block; you can close this page");
+          $("sendall-recipient").value = "";
+          setTimeout(function () {
+            $("sendall-backdrop").classList.add("hidden");
+            renderGallery();
+          }, 1400);
+        });
+    });
+  });
 }
 
 $("sendall-btn").onclick = openSendAll;
