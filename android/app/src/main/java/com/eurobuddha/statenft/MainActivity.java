@@ -721,6 +721,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 for (StateNft.Meta m : collections) known.add(m.tokenid);
                 nftRows.clear();
                 tokenRows.clear();
+                ArrayList<StateNft.Meta> toAdopt = new ArrayList<>();
                 for (int i = 0; i < bal.length(); i++) {
                     JSONObject row = bal.optJSONObject(i);
                     if (row == null) continue;
@@ -732,7 +733,13 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     Object nameObj = t.opt("name");
                     JSONObject metaObj = nameObj instanceof JSONObject ? (JSONObject) nameObj : t;
                     StateNft.Meta cand = StateNft.parseMeta(tid, t);
-                    if (StateNft.isCandidate(cand)) continue;   // un-adopted StateNFT: Scan owns adoption
+                    if (StateNft.isCandidate(cand)) {
+                        // un-adopted StateNFT held in this wallet: adopt it
+                        // automatically (script-fingerprint verified below) —
+                        // received collections must never hide behind a manual scan
+                        toAdopt.add(cand);
+                        continue;
+                    }
                     boolean isNft = "true".equals(metaObj.optString("nft", ""))
                             || (!metaObj.optString("url", "").isEmpty()
                                 && parseIntSafe(row.optString("total", "0")) > 0
@@ -744,11 +751,47 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 for (JSONObject r : nftRows) sig.append(r.optString("tokenid")).append('|');
                 sig.append('/');
                 for (JSONObject r : tokenRows) sig.append(r.optString("tokenid")).append('|');
+                if (!toAdopt.isEmpty()) autoAdopt(toAdopt, 0, 0);
                 if (sig.toString().equals(lastGallerySig)) return;   // nothing new — no rebuild
                 lastGallerySig = sig.toString();
                 if (screen == Screen.GALLERY) renderGalleryPreserveScroll();
             }
             @Override public void onError(String message) { /* silent; dot shows state */ }
+        });
+    }
+
+    /** Auto-adopt received StateNFT collections: verify the on-chain script
+     *  fingerprint (the definitive test — metadata alone is never enough),
+     *  then file them so they appear without a manual Scan Wallet. */
+    private void autoAdopt(ArrayList<StateNft.Meta> cands, int i, int adopted) {
+        if (i >= cands.size()) {
+            if (adopted > 0) {
+                loadLocalCollections();
+                lastGallerySig = "";
+                if (screen == Screen.GALLERY) renderGalleryPreserveScroll();
+            }
+            return;
+        }
+        StateNft.Meta cand = cands.get(i);
+        node.cmd("tokens tokenid:" + cand.tokenid, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject t = json.optJSONObject("response");
+                String pk = StateNft.creatorPk(t == null ? "" : t.optString("script", ""));
+                if (pk.isEmpty()) { autoAdopt(cands, i + 1, adopted); return; }
+                StateNft.Meta m = StateNft.parseMeta(cand.tokenid, t);
+                m.creatorPk = pk;
+                countOwned(m, () -> {
+                    if (LocalStore.findByTokenid(MainActivity.this, m.tokenid) == null) {
+                        m.localId = LocalStore.nextId(MainActivity.this);
+                        m.phase = "DONE";
+                        m.created = false;
+                        LocalStore.upsert(MainActivity.this, MintEngine.rowFromMeta(m, new JSONArray()));
+                        toast("Adopted “" + m.name + "” — found in your wallet");
+                    }
+                    autoAdopt(cands, i + 1, adopted + 1);
+                });
+            }
+            @Override public void onError(String message) { autoAdopt(cands, i + 1, adopted); }
         });
     }
 
