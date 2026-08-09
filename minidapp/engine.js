@@ -102,7 +102,9 @@ var ENGINE_MIGRATIONS = [
   "`iscreator` int DEFAULT 0",
   "`postedat` int DEFAULT 0",
   "`buriedat` int DEFAULT 0",
-  "`itemtraits` clob"
+  "`itemtraits` clob",
+  "`splitunits` int DEFAULT -1",
+  "`splitretries` int DEFAULT 0"
 ];
 
 function engineInitTables(cb) {
@@ -499,6 +501,33 @@ function enginePhaseSplit(row, tip, done) {
     }
     if (units >= row.SIZE && bigs.length === 0) {
       engineSetPhase(row, "STAMP", done); return;
+    }
+    /* Honest escalation: three pending cycles with no new units means the
+     * chain is rejecting the split by consensus (definition too heavy for the
+     * 64KB TxPoW even at unit+change) — surface it and stop hammering.
+     * Progress resets the counter, so a slow confirmation self-heals. */
+    var readyAny = false;
+    for (var bi = 0; bi < bigs.length; bi++) {
+      if (enginePendingOk(bigs[bi].coinid, tip)) { readyAny = true; break; }
+    }
+    if (readyAny && bigs.length > 0) {
+      var lastUnits = parseInt(row.SPLITUNITS === undefined ? -1 : row.SPLITUNITS, 10);
+      var retries = parseInt(row.SPLITRETRIES || 0, 10);
+      if (lastUnits >= 0 && units <= lastUnits) {
+        retries++;
+        if (retries >= 3) {
+          MDS.sql("UPDATE collections SET splitretries=" + retries +
+                  " WHERE id=" + row.ID, function () {});
+          engineSetError(row, "split cannot fit the chain's 64KB transaction cap - " +
+            "this token's definition (icon + traits) is too heavy. Bury this " +
+            "collection and re-mint with a lighter icon or fewer traits.", done);
+          return;
+        }
+      } else { retries = 0; }
+      row.SPLITRETRIES = retries;
+      row.SPLITUNITS = units;
+      MDS.sql("UPDATE collections SET splitretries=" + retries +
+              ", splitunits=" + units + " WHERE id=" + row.ID, function () {});
     }
     /* Every token-carrying output (and the input) embeds the FULL token
      * definition — icon + per-item traits included. A generative collection's

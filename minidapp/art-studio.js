@@ -356,9 +356,10 @@ function artRenderBudget(reuseCol) {
 
 $("g-size").onchange = function () { artRenderBudget(null); };
 
-/* rasterize an SVG to a wallet-icon JPEG base64 within ICON_BUDGET:
- * largest size/quality that fits wins (family convention) */
-function svgToIconB64(svg, cb) {
+/* rasterize an SVG to a wallet-icon JPEG base64 within the given budget
+ * (default ICON_BUDGET): largest size/quality that fits wins */
+function svgToIconB64(svg, cb, budget) {
+  var target = budget || ICON_BUDGET;
   try {
     /* our SVGs are viewBox-only; WebKit/Firefox need explicit dimensions to
      * rasterize onto a canvas (else: blank icon -> wallet placeholder) */
@@ -366,7 +367,7 @@ function svgToIconB64(svg, cb) {
     var img = new Image();
     img.onload = function () {
       try {
-        var tries = [[200, 0.85], [200, 0.7], [160, 0.7], [128, 0.6], [96, 0.55]];
+        var tries = [[200, 0.85], [200, 0.7], [160, 0.7], [128, 0.6], [96, 0.55], [72, 0.5]];
         var best = "";
         for (var i = 0; i < tries.length; i++) {
           var cv = document.createElement("canvas");
@@ -375,7 +376,7 @@ function svgToIconB64(svg, cb) {
           cx.drawImage(img, 0, 0, tries[i][0], tries[i][0]);
           var b64 = cv.toDataURL("image/jpeg", tries[i][1]).split(",")[1];
           best = b64;
-          if (b64.length <= ICON_BUDGET) { cb(b64); return; }
+          if (b64.length <= target) { cb(b64); return; }
         }
         cb(best);   // smallest attempt even if slightly over
       } catch (e) { cb(""); }
@@ -383,6 +384,14 @@ function svgToIconB64(svg, cb) {
     img.onerror = function () { cb(""); };
     img.src = "data:image/svg+xml;base64," + btoa(svg);
   } catch (e) { cb(""); }
+}
+
+/* the icon + traits become the token's IMMUTABLE on-chain definition; past
+ * ~12KB it can no longer split under the 64KB TxPoW cap ("Math" taught us) */
+var ART_DEF_BUDGET = 10500;
+function artEstimatedDefLen(iconB64, traitsJson, nameDesc) {
+  return (iconB64 || "").length + (traitsJson || "").length +
+         (nameDesc || "").length + 900;
 }
 
 $("g-mint-btn").onclick = function () {
@@ -453,7 +462,34 @@ $("g-mint-btn").onclick = function () {
     });
   }
 
-  withGenIcon(function (iconB64) {
+  withGenIcon(function (iconRaw) {
+    /* definition-weight guard: refuse (or slim the icon) rather than mint a
+     * token whose immutable definition can never split on-chain */
+    var traitsJson = JSON.stringify(traitsMap);
+    var est = artEstimatedDefLen(iconRaw, traitsJson, name + desc);
+    if (est > ART_DEF_BUDGET && !iconUrl && col.items.length) {
+      svgToIconB64(col.items[iconItem - 1].svg, function (slim) {
+        var est2 = artEstimatedDefLen(slim ? slim + "</artimage>" : "", traitsJson, name + desc);
+        if (slim && est2 <= ART_DEF_BUDGET) {
+          artMintGo(slim + "</artimage>");
+        } else {
+          artSetStatus("g-status", "traits + icon would make an unsplittable token (" +
+            est + "B > " + ART_DEF_BUDGET + "B) — use a hosted icon URL or fewer items", "err");
+          $("g-mint-btn").disabled = false;
+        }
+      }, 3500);
+      return;
+    }
+    if (est > ART_DEF_BUDGET) {
+      artSetStatus("g-status", "traits + icon would make an unsplittable token (" +
+        est + "B > " + ART_DEF_BUDGET + "B) — use a hosted icon URL or fewer items", "err");
+      $("g-mint-btn").disabled = false;
+      return;
+    }
+    artMintGo(iconRaw);
+  });
+
+  function artMintGo(iconB64) {
     MDS.cmd("getaddress", function (res) {
       if (!res.status) {
         artSetStatus("g-status", "getaddress failed", "err");
@@ -486,7 +522,7 @@ $("g-mint-btn").onclick = function () {
             });
         });
     });
-  });
+  }
 };
 
 function artFinishMint(cid, col) {
@@ -595,7 +631,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.3", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.4", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

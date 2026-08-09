@@ -35,7 +35,11 @@ public class MintService extends Service {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!hasWork(MintService.this)) {
-                if (++idleTicks >= 2) { stopSelf(); return; }
+                if (++idleTicks >= 2) {
+                    LocalStore.logEvent(MintService.this, "Engine idle — service stopped");
+                    stopSelf();
+                    return;
+                }
             } else {
                 idleTicks = 0;
             }
@@ -93,7 +97,12 @@ public class MintService extends Service {
         // If the OS refuses foreground promotion, bail gracefully rather than
         // crash-looping the whole app on every launch that kicks the engine —
         // the mint resumes on the next successful start.
-        if (!startForegroundCompat()) { stopSelf(); return; }
+        if (!startForegroundCompat()) {
+            LocalStore.logEvent(this, "Foreground refused by the OS — engine waits for the next start");
+            stopSelf();
+            return;
+        }
+        LocalStore.logEvent(this, "Engine service engaged — sealing continues with the app closed");
         node = new NodeApi(this, enabled -> { if (enabled) handler.post(tick); });
         handler.postDelayed(tick, 4000);
     }

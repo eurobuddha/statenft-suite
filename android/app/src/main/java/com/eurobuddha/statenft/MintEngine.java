@@ -43,8 +43,11 @@ public final class MintEngine {
             tickRow(ctx, node, rows, i + 1, tip, acted, done);
             return;
         }
+        final String rowName = row.optString("name", "?");
         Done next = msg -> {
-            done.done(msg);
+            String line = rowName + " · " + phase + ": " + msg;
+            LocalStore.logEvent(ctx, line);
+            done.done(line);
             tickRow(ctx, node, rows, i + 1, tip, true, done);
         };
         if ("CREATE".equals(phase)) phaseCreate(ctx, node, row, tip, next);
@@ -214,6 +217,29 @@ public final class MintEngine {
                 if (LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) ready.add(c);
             }
             if (ready.isEmpty()) { done.done("Splits confirming…"); return; }
+            /* Honest escalation: a ready coin here means a posted split's
+             * pending TTL expired. If the unit count hasn't moved after three
+             * such cycles, the txn is being rejected by consensus (too heavy
+             * for the 64KB TxPoW even at unit+change) — say so and stop
+             * hammering the chain. Progress resets the counter, so a slow
+             * confirmation self-heals. */
+            int lastUnits = row.optInt("splitunits", -1);
+            int retries = row.optInt("splitretries", 0);
+            if (lastUnits >= 0 && units <= lastUnits) {
+                retries++;
+                if (retries >= 3) {
+                    put(row, "splitretries", retries);
+                    setError(ctx, row, "split cannot fit the chain's 64KB transaction cap — "
+                            + "this token's definition (icon + traits) is too heavy. "
+                            + "Bury this collection and re-mint with a lighter icon or fewer traits.", done);
+                    return;
+                }
+            } else {
+                retries = 0;
+            }
+            put(row, "splitretries", retries);
+            put(row, "splitunits", units);
+            LocalStore.upsert(ctx, row);
             /* Every token-carrying output (and the input) embeds the FULL token
              * definition — icon + per-item traits included. A generative
              * collection's definition runs ~11KB, so the old fixed 3-unit batch
@@ -233,6 +259,18 @@ public final class MintEngine {
         }, e -> setError(ctx, row, e, done));
     }
 
+    /** Estimated on-chain token-definition weight at mint time: icon + traits
+     *  + name/desc + ~900B for the script and JSON scaffolding. Definitions
+     *  over ~12KB cannot split reliably under the 64KB TxPoW cap even at
+     *  unit+change — such a mint must be refused BEFORE tokencreate, because
+     *  the definition is immutable afterwards ("Math" taught us this). */
+    static final int DEF_BUDGET = 10500;
+    static int estimatedDefLen(String iconB64, String traitsJson, String nameDesc) {
+        return (iconB64 == null ? 0 : iconB64.length())
+             + (traitsJson == null ? 0 : traitsJson.length())
+             + (nameDesc == null ? 0 : nameDesc.length()) + 900;
+    }
+
     /** Unit outputs per split txn such that (k units + change + input) token
      *  definitions stay within ~40KB, leaving 24KB headroom for the signature
      *  and proofs under the 64KB TxPoW cap. Legacy ~7KB definitions still get
@@ -248,7 +286,7 @@ public final class MintEngine {
         JSONObject c = bigs.get(i);
         LocalStore.setPending(ctx, c.optString("coinid"), tip);
         int k = Math.min(splitBatch(defLen), parseInt(c.optString("tokenamount", "1")));
-        android.util.Log.d("StateNFT", "split " + row.optString("name") + ": defLen=" + defLen
+        LocalStore.logEvent(ctx, "split " + row.optString("name") + ": defLen=" + defLen
                 + " batch=" + k + " coin=" + c.optString("tokenamount"));
         splitCoin(node, row, c, k,
                 () -> splitNext(ctx, node, row, tip, bigs, i + 1, defLen, done),
@@ -463,23 +501,69 @@ public final class MintEngine {
      *  when a single-block window itself exceeded the cap (skipped) or the
      *  sweep was cut short — callers must not treat absence as proof then.
      *  (Family rule: bounded paging, adaptive halving.) */
+    /* ---- whole-wallet coin cache ----
+     * Per-token `coins relevant:true tokenid:X` replies can land in the Binder
+     * DEATH WINDOW (~250–256KB): just under the node's 256,000 hand-off cutoff
+     * yet over the broadcast parcel limit — the delivery kills the app process
+     * before any callback (TransactionTooLargeException, no stub, no error).
+     * The whole-wallet list is safe by construction: big wallets always exceed
+     * the cutoff and ride the fork node's content:// file hand-off; small ones
+     * are nowhere near the window. So: fetch the WHOLE list once, filter by
+     * tokenid locally, cache briefly so N collections cost one query. */
+    private static final long WALLET_COINS_TTL_MS = 20000;
+    private static JSONArray sWalletCoins = null;
+    private static long sWalletCoinsAt = 0;
+
+    private static synchronized JSONArray cachedWalletCoins() {
+        if (sWalletCoins != null && System.currentTimeMillis() - sWalletCoinsAt < WALLET_COINS_TTL_MS) {
+            return sWalletCoins;
+        }
+        return null;
+    }
+
+    private static synchronized void cacheWalletCoins(JSONArray coins) {
+        sWalletCoins = coins;
+        sWalletCoinsAt = System.currentTimeMillis();
+    }
+
+    private static JSONArray filterByToken(JSONArray all, String tid) {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject c = all.optJSONObject(i);
+            if (c != null && tid.equals(c.optString("tokenid"))) out.put(c);
+        }
+        return out;
+    }
+
     public static void tokenCoinsBounded(NodeApi node, String tid, boolean relevant,
                                          CoinsBounded ok, java.util.function.Consumer<String> fail) {
-        String command = "coins " + (relevant ? "relevant:true " : "") + "tokenid:" + tid;
-        node.cmd(command, new NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) {
-                if (!json.optBoolean("status", false)) {
-                    fail.accept(json.optString("error", "coins query failed"));
-                    return;
+        if (relevant) {
+            JSONArray cached = cachedWalletCoins();
+            if (cached != null) { ok.ok(filterByToken(cached, tid), false); return; }
+            node.cmd("coins relevant:true", new NodeApi.Cb() {
+                @Override public void onResult(JSONObject json) {
+                    if (!json.optBoolean("status", false)) {
+                        fail.accept(json.optString("error", "coins query failed"));
+                        return;
+                    }
+                    JSONArray arr = json.optJSONArray("response");
+                    if (arr == null) arr = new JSONArray();
+                    cacheWalletCoins(arr);
+                    ok.ok(filterByToken(arr, tid), false);
                 }
-                JSONArray arr = json.optJSONArray("response");
-                ok.ok(arr == null ? new JSONArray() : arr, false);
-            }
-            @Override public void onError(String message) {
-                if (NodeApi.ERR_TOO_LONG.equals(message)) { pagedSweep(node, tid, relevant, ok, fail); return; }
-                fail.accept(message);
-            }
-        });
+                @Override public void onError(String message) {
+                    // legacy node without the file hand-off: the whole list can
+                    // overflow — fall back to the bounded per-token sweep
+                    if (NodeApi.ERR_TOO_LONG.equals(message)) { pagedSweep(node, tid, true, ok, fail); return; }
+                    fail.accept(message);
+                }
+            });
+            return;
+        }
+        /* all-coins pass (holdings beyond this wallet): the global per-token
+         * reply is the one that stalled Panda at 383KB — the sweep's bounded
+         * windows keep every reply small, so lead with it directly */
+        pagedSweep(node, tid, false, ok, fail);
     }
 
     private static void pagedSweep(NodeApi node, String tid, boolean relevant,
@@ -489,7 +573,9 @@ public final class MintEngine {
                 JSONObject r = json.optJSONObject("response");
                 int tip = r == null ? 0 : r.optInt("block", 0);
                 if (tip <= 0) { fail.accept("block height unavailable for paged coin sweep"); return; }
-                sweepWindow(node, tid, relevant, tip, 0, 512,
+                // start small: window replies must stay far below the Binder
+                // death window (~250KB), not merely below the 256KB stub cutoff
+                sweepWindow(node, tid, relevant, tip, 0, 64,
                         new java.util.LinkedHashMap<>(), new int[]{0}, new boolean[]{false}, ok);
             }
             @Override public void onError(String message) { fail.accept(message); }
@@ -562,7 +648,7 @@ public final class MintEngine {
     }
 
     private static void setError(Context ctx, JSONObject row, String error, Done done) {
-        android.util.Log.d("StateNFT", "engine error [" + row.optString("name") + " · "
+        LocalStore.logEvent(ctx, "ERROR [" + row.optString("name") + " · "
                 + row.optString("phase") + "]: " + error);
         put(row, "error", error);
         LocalStore.upsert(ctx, row);

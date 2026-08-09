@@ -94,6 +94,38 @@ public final class LocalStore {
         return prefs(c).getLong("engine_tick", 0);
     }
 
+    /* ---- engine activity log ----
+     * Ring buffer behind the tappable pane above the mint rail: every phase
+     * summary, transition and error lands here so "is anything happening?"
+     * is answerable in-app, not just over adb. */
+
+    public static synchronized void logEvent(Context c, String msg) {
+        if (msg == null || msg.isEmpty()) return;
+        android.util.Log.d("StateNFT", msg);
+        try {
+            if (msg.equals(prefs(c).getString("engine_log_last", ""))) return;  // no 25s tick spam
+            JSONArray log;
+            try { log = new JSONArray(prefs(c).getString("engine_log", "[]")); }
+            catch (Exception e) { log = new JSONArray(); }
+            JSONObject entry = new JSONObject();
+            entry.put("t", System.currentTimeMillis());
+            entry.put("m", msg);
+            log.put(entry);
+            while (log.length() > 250) log.remove(0);
+            prefs(c).edit().putString("engine_log", log.toString())
+                    .putString("engine_log_last", msg).apply();
+        } catch (Exception ignored) {}
+    }
+
+    public static JSONArray engineLog(Context c) {
+        try { return new JSONArray(prefs(c).getString("engine_log", "[]")); }
+        catch (Exception e) { return new JSONArray(); }
+    }
+
+    public static void clearEngineLog(Context c) {
+        prefs(c).edit().remove("engine_log").remove("engine_log_last").apply();
+    }
+
     /* ---- wizard drafts (nft / token / collection) ---- */
 
     public static void saveDraft(Context c, String key, JSONObject draft) {

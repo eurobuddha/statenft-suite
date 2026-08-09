@@ -13,6 +13,15 @@ public class StampPlannerTest {
     /* (k units + change + input) full token definitions must fit ~40KB under
      * the 64KB TxPoW cap — a fixed 3-unit batch silently stalled generative
      * mints whose ~11KB definitions built txns the chain rejected quietly. */
+    @Test public void definitionEstimatorGuardsUnsplittableMints() {
+        // ~6KB icon + ~5KB traits (the "Math" shape) must trip the guard path
+        String icon = "A".repeat(6000);
+        String traits = "B".repeat(5000);
+        assertTrue(MintEngine.estimatedDefLen(icon, traits, "Math") > MintEngine.DEF_BUDGET);
+        // a slimmed 4KB icon brings the same traits back under budget
+        assertTrue(MintEngine.estimatedDefLen("A".repeat(4000), traits, "Math") <= MintEngine.DEF_BUDGET);
+    }
+
     @Test public void splitBatchSizesToTokenDefinition() {
         assertEquals(3, MintEngine.splitBatch(7000));    // legacy: proven batch
         assertEquals(1, MintEngine.splitBatch(11079));   // generative: unit + change

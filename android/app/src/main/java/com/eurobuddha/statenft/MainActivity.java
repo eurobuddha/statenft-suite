@@ -43,7 +43,7 @@ import java.util.Locale;
  */
 public class MainActivity extends AppCompatActivity implements ViewerScreen.Host {
 
-    private enum Screen { LAUNCH, GALLERY, COLLECTION, STUDIO, CREATE_COLLECTION, CREATE_NFT, CREATE_TOKEN, CREATE_GENERATIVE, AIRDROP, TRANSFER, BURY, MANAGE, SCAN }
+    private enum Screen { LAUNCH, GALLERY, COLLECTION, STUDIO, CREATE_COLLECTION, CREATE_NFT, CREATE_TOKEN, CREATE_GENERATIVE, AIRDROP, TRANSFER, BURY, MANAGE, SCAN, ENGINE_LOG }
 
     private static final int PICK_CREATE = 1;
     private static final int PICK_RECOVERY = 2;
@@ -139,6 +139,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 openMeta = findCollectionByLocalId(openMeta.localId, openMeta);
                 refreshDetail();
             }
+            if (screen == Screen.ENGINE_LOG) renderEngineLog(backAction);
             main.postDelayed(this, 25000);
         }
     };
@@ -803,6 +804,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         m.phase = "DONE";
                         m.created = false;
                         LocalStore.upsert(MainActivity.this, MintEngine.rowFromMeta(m, new JSONArray()));
+                        LocalStore.logEvent(MainActivity.this, "Adopted “" + m.name + "” — found in wallet");
                         toast("Adopted “" + m.name + "” — found in your wallet");
                     }
                     autoAdopt(cands, i + 1, adopted + 1);
@@ -940,8 +942,12 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             beatRow.addView(Design.pill(this, age < 90 ? "Engine live" : "Engine asleep",
                     age < 90 ? Design.PILL_DONE : Design.PILL_ERR));
             beatRow.addView(Design.note(this, age < 90
-                    ? "  ticked " + age + "s ago — seals with the screen off"
-                    : "  no tick yet — tap Resume to engage"), new LinearLayout.LayoutParams(0, -2, 1){{ leftMargin = dp(8); }});
+                    ? "  ticked " + age + "s ago · tap for the engine log"
+                    : "  no tick yet — tap Resume, or tap here for the log"), new LinearLayout.LayoutParams(0, -2, 1){{ leftMargin = dp(8); }});
+            beatRow.setClickable(true);
+            Design.pressable(beatRow);
+            final StateNft.Meta mF = m;
+            beatRow.setOnClickListener(v -> renderEngineLog(() -> openCollection(mF)));
             body.addView(beatRow, lpm(0, 0, 0, 12));
         }
         if ("NEEDIMAGES".equals(m.phase)) body.addView(recoveryPanel(m), lpm(0, 0, 0, 12));
@@ -2258,6 +2264,33 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         : ArtStudio.svgBitmap(lead.optString("svg"), 512);
                 iconB64 = ImageTools.iconFromBitmap(b, ImageTools.ICON_BUDGET);
             }
+            /* Definition-weight guard: icon + traits become the token's
+             * IMMUTABLE on-chain definition, and past ~12KB it can no longer
+             * split under the 64KB TxPoW cap. Shrink the icon before minting;
+             * refuse outright rather than mint an unsplittable collection. */
+            if (err.isEmpty()) {
+                String traitsJson = traitsMap.toString();
+                String iconInPlay = !iconB64.isEmpty() ? iconB64
+                        : (images.length > 0 ? images[0] : "");
+                int est = MintEngine.estimatedDefLen(iconInPlay, traitsJson, "");
+                if (est > MintEngine.DEF_BUDGET) {
+                    JSONObject lead = itemsF.optJSONObject(0);
+                    android.graphics.Bitmap b = lead == null ? null
+                            : ArtStudio.svgBitmap(lead.optString("svg"), 512);
+                    String slim = ImageTools.iconFromBitmap(b, 4000);
+                    if (!slim.isEmpty()
+                            && MintEngine.estimatedDefLen(slim, traitsJson, "") <= MintEngine.DEF_BUDGET) {
+                        iconB64 = slim;
+                        LocalStore.logEvent(MainActivity.this,
+                                "Icon slimmed to keep the token definition splittable ("
+                                + est + "B est → icon " + slim.length() + "B)");
+                    } else {
+                        err = "Traits + icon would make an unsplittable token ("
+                                + est + "B > " + MintEngine.DEF_BUDGET
+                                + "B) — use a hosted icon URL or fewer items";
+                    }
+                }
+            }
             final String errF = err, iconF = iconB64;
             runOnUiThread(() -> {
                 genBusy = false;
@@ -2411,6 +2444,58 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     /* ================= MANAGE ================= */
 
+    /** The engine's own record — every tick summary, phase change and error,
+     *  newest first. Reached from the pane above the mint rail and Manage. */
+    private void renderEngineLog(Runnable back) {
+        setScreen(Screen.ENGINE_LOG, back != null ? back : this::renderManage);
+        appbar("Engine log", true, false);
+        hideNav();
+
+        JSONArray log = LocalStore.engineLog(this);
+        long beat = LocalStore.lastHeartbeat(this);
+        body.addView(Design.lot(this, "The engine's own record — newest first"));
+        body.addView(Design.note(this, (beat == 0 ? "No tick recorded yet"
+                : "Last tick " + ((System.currentTimeMillis() - beat) / 1000) + "s ago")
+                + " · " + log.length() + " entries · refreshes every 25s"), lpm(0, 4, 0, 10));
+
+        LinearLayout actions = horizontal(Gravity.CENTER_VERTICAL);
+        TextView copy = Design.button(this, "Copy log", false);
+        copy.setOnClickListener(v -> {
+            StringBuilder sb = new StringBuilder();
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US);
+            for (int i = log.length() - 1; i >= 0; i--) {
+                JSONObject e = log.optJSONObject(i);
+                if (e != null) sb.append(f.format(new java.util.Date(e.optLong("t"))))
+                        .append("  ").append(e.optString("m")).append('\n');
+            }
+            copyText(sb.toString());
+        });
+        actions.addView(copy, weight(44, 0, 4));
+        TextView clear = Design.button(this, "Clear", false);
+        clear.setOnClickListener(v -> { LocalStore.clearEngineLog(this); renderEngineLog(back); });
+        actions.addView(clear, weight(44, 4, 0));
+        body.addView(actions, lpm(0, 0, 0, 12));
+
+        if (log.length() == 0) {
+            body.addView(Design.note(this, "Nothing yet — engage the engine and every step lands here."));
+        }
+        java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US);
+        for (int i = log.length() - 1; i >= 0; i--) {
+            JSONObject e = log.optJSONObject(i);
+            if (e == null) continue;
+            String msg = e.optString("m");
+            LinearLayout rowV = horizontal(Gravity.TOP);
+            TextView tt = Design.text(this, fmt.format(new java.util.Date(e.optLong("t"))),
+                    9.5f, Design.DIM(), Design.mono());
+            tt.setPadding(0, dp(1), dp(8), 0);
+            rowV.addView(tt);
+            TextView mm = Design.text(this, msg, 10.5f,
+                    msg.startsWith("ERROR") ? Design.ACCENT() : Design.INK(), Design.mono());
+            rowV.addView(mm, new LinearLayout.LayoutParams(0, -2, 1));
+            body.addView(rowV, lpm(0, 0, 0, 6));
+        }
+    }
+
     private void renderManage() {
         setScreen(Screen.MANAGE, null);
         appbar("Manage", false, false);
@@ -2422,6 +2507,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         nodeCard.addView(Design.text(this, on ? "Minima Core connected" : "Not paired",
                 14, on ? Design.INK() : Design.ACCENT(), Design.sansBold()), lpm(0, 4, 0, 6));
         nodeCard.addView(kvRow("Last response", node == null || node.lastOkMs() == 0 ? "none yet" : "received"));
+        TextView engineLogBtn = Design.button(this, "Engine log", false);
+        engineLogBtn.setOnClickListener(v -> renderEngineLog(this::renderManage));
+        nodeCard.addView(engineLogBtn, lph(44, 0, 8, 0, 0));
         TextView reconnect = Design.button(this, "Reconnect", false);
         reconnect.setOnClickListener(v -> { if (node != null) node.reRegister(); toast("Re-pairing…"); });
         nodeCard.addView(reconnect, lph(46, 0, 10, 0, 6));
