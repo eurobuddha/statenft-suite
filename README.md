@@ -72,6 +72,17 @@ stripped or forged.
 > creator), and refuses honestly otherwise. Photo plates tightened
 > (~10.9K b64 max) so standard collections clear the joint budget.
 
+> **v4.1.11 — FILTR.** A third tab: a full image editor built on the
+> vendored tools/filtr WebGL2 engine. Import (file/drop/paste), edit
+> (crop, rotate, flip, resize, true-transparency erase brush), stylize
+> (15 effects with full parameter panels, a 9-slider global grade, 7
+> stackable post passes, 14 presets, apply-and-continue baking for
+> unlimited layering), annotate (comic speech/thought/shout/caption
+> bubbles + a text tool), then download at full resolution or send the
+> flattened result straight into the Single-NFT wizard or the Photo
+> Cartoon pack. Everything on-device; regenerate the engine bundle with
+> filtrport/build.sh.
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed
