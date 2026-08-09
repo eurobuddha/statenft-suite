@@ -231,9 +231,9 @@ public final class ViewerScreen {
         return row;
     }
 
-    private static Bitmap bitmapFor(StateNft.Meta meta, StateNft.Item it) {
+    private static Bitmap bitmapFor(Activity act, StateNft.Meta meta, StateNft.Item it) {
         if (it.imageUrl != null && !it.imageUrl.isEmpty()) {
-            Bitmap b = ImageLoader.decode(it.imageUrl, 1800);
+            Bitmap b = ImageLoader.decode(act, it.imageUrl, 1800);
             if (b != null) return b;
         }
         return Identicon.forToken(meta.tokenid + it.index, 900);
@@ -242,7 +242,7 @@ public final class ViewerScreen {
     private static void saveToPhotos(Activity act, StateNft.Meta meta, StateNft.Item it) {
         new Thread(() -> {
             try {
-                Bitmap b = bitmapFor(meta, it);
+                Bitmap b = bitmapFor(act, meta, it);
                 String name = meta.name.replaceAll("[^A-Za-z0-9]+", "_") + "_" + it.index + ".jpg";
                 ContentValues cv = new ContentValues();
                 cv.put(MediaStore.Images.Media.DISPLAY_NAME, name);
@@ -265,7 +265,7 @@ public final class ViewerScreen {
     private static void shareImage(Activity act, StateNft.Meta meta, StateNft.Item it) {
         new Thread(() -> {
             try {
-                Bitmap b = bitmapFor(meta, it);
+                Bitmap b = bitmapFor(act, meta, it);
                 java.io.File dir = new java.io.File(act.getCacheDir(), "shared");
                 if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("no cache dir");
                 java.io.File f = new java.io.File(dir, "lot-" + it.index + ".jpg");
