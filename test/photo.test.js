@@ -143,6 +143,31 @@ var flatDraw = art.artGenerate("photo-flat-seed", "1", cfg);
 ok(flatDraw && flatDraw.svg.indexOf("NaN") === -1 &&
    b64(flatDraw.svg.length) <= 16000, "flat photo draws clean");
 
+/* ---- config migration: stale drafts must gain new slots, keep edits ---- */
+
+var stale = art.artDefaultConfig("photo");
+stale.slots = stale.slots.filter(function (s) { return s.key !== "render"; });
+for (var ms = 0; ms < stale.slots.length; ms++) {
+  if (stale.slots[ms].key === "mode") {
+    stale.slots[ms].variants[0].weight = 77;       // user-edited Natural weight
+    stale.slots[ms].variants[1].on = false;        // user disabled Poster
+  }
+}
+var migrated = art.artMigrateConfig(stale);
+var hasRender = false, natW = 0, posterOn = true;
+for (var mi = 0; mi < migrated.slots.length; mi++) {
+  if (migrated.slots[mi].key === "render") { hasRender = true; }
+  if (migrated.slots[mi].key === "mode") {
+    natW = migrated.slots[mi].variants[0].weight;
+    posterOn = migrated.slots[mi].variants[1].on !== false;
+  }
+}
+ok(hasRender, "migration adds the missing Render slot");
+ok(natW === 77, "migration preserves edited weights");
+ok(!posterOn, "migration preserves disabled variants");
+ok(migrated.slots.length === art.artDefaultConfig("photo").slots.length,
+   "migrated config matches the current slot set");
+
 art.artSetPhoto(null);   // leave no global state behind
 
 console.log(fails === 0 ? "\nALL PASS" : "\n" + fails + " FAILURES");

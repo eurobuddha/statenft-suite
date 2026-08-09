@@ -126,6 +126,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private final java.util.HashSet<String> artOpenSlots = new java.util.HashSet<>();
     private JSONArray artItems = new JSONArray();
     private boolean artPhotoLoaded = false;  // mirrors ART_PHOTO_SRC in the bridge WebView
+    private final java.util.HashSet<String> artMigrated = new java.util.HashSet<>();
     private final ArrayList<android.graphics.Bitmap> artPreviews = new ArrayList<>();
     private LinearLayout artSheetBox;                  // proof sheet + send button, hidden when stale
     private final Runnable artSaveRunnable = this::artSaveDraft;  // debounced: seed keystrokes
@@ -1894,6 +1895,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             if (cfg == null) {
                 studio.defaultConfig(artStyle, c2 -> {
                     artCfgs.put(artStyle, c2);
+                    artMigrated.add(artStyle);
+                    if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+                });
+                return;
+            }
+            /* saved drafts age across releases — rebuild on the current slot
+             * set once per process so new slots (e.g. Render) actually show */
+            if (!artMigrated.contains(artStyle)) {
+                artMigrated.add(artStyle);
+                studio.migrate(cfg, m -> {
+                    if (m != null && m.length() > 0) { artCfgs.put(artStyle, m); artSaveDraft(); }
                     if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
                 });
                 return;

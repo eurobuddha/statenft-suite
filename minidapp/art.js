@@ -3242,11 +3242,68 @@ function photoSmoothPath(pts) {
   return d + "z";
 }
 
+/* absorb tiny color islands into their dominant neighbour — sensor noise
+ * and AI paint texture otherwise trace into confetti rings that eat the
+ * byte budget. Deterministic scan order; one pass. */
+function photoDespeckle(cells, n, minSize) {
+  var out = cells.slice();
+  var seen = [];
+  var i;
+  for (i = 0; i < n * n; i++) { seen.push(false); }
+  for (var start = 0; start < n * n; start++) {
+    if (seen[start]) { continue; }
+    var color = out[start];
+    var comp = [start];
+    var edge = {};
+    seen[start] = true;
+    for (var q = 0; q < comp.length; q++) {
+      var c = comp[q];
+      var x = c % n;
+      var nb = [];
+      if (x > 0) { nb.push(c - 1); }
+      if (x < n - 1) { nb.push(c + 1); }
+      if (c >= n) { nb.push(c - n); }
+      if (c < n * (n - 1)) { nb.push(c + n); }
+      for (var k = 0; k < nb.length; k++) {
+        var m = nb[k];
+        if (out[m] === color) {
+          if (!seen[m]) { seen[m] = true; comp.push(m); }
+        } else {
+          edge[out[m]] = (edge[out[m]] || 0) + 1;
+        }
+      }
+    }
+    if (comp.length < minSize) {
+      var best = -1, bestN = 0;
+      for (var col in edge) {
+        if (!edge.hasOwnProperty(col)) { continue; }
+        if (edge[col] > bestN || (edge[col] === bestN && parseInt(col, 10) < best)) {
+          best = parseInt(col, 10); bestN = edge[col];
+        }
+      }
+      if (best >= 0) {
+        for (var z = 0; z < comp.length; z++) { out[comp[z]] = best; }
+      }
+    }
+  }
+  return out;
+}
+
+/* |shoelace| area of a simplified ring, in cells² */
+function photoRingArea(pts) {
+  var a = 0;
+  for (var i = 0; i < pts.length - 1; i++) {
+    a += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+  }
+  return Math.abs(a) / 2;
+}
+
 /* stacked curved regions: most-common color floods the frame, every other
- * color is traced, simplified (eps ~1.1 cells) and drawn with a self-color
+ * color is traced, simplified (eps in cells) and drawn with a self-color
  * (or ink) stroke that swallows the seams between smoothed neighbours */
-function photoTrace(model, G, mode, outline, P) {
+function photoTrace(model, G, eps, mode, outline, P) {
   var cells = photoSmooth(photoSmooth(photoResample(model.cells, model.cols, G), G), G);
+  cells = photoDespeckle(cells, G, Math.max(6, I(G * G / 180)));
   var pal = photoPalette(model, mode, P);
   var counts = {};
   var i;
@@ -3263,8 +3320,8 @@ function photoTrace(model, G, mode, outline, P) {
     var loops = photoTraceLoops(mask, G);
     var d = "";
     for (var L = 0; L < loops.length; L++) {
-      var ring = photoDpClosed(photoMergeCollinear(loops[L]), 1.1);
-      if (ring.length < 5) { continue; }
+      var ring = photoDpClosed(photoMergeCollinear(loops[L]), eps);
+      if (ring.length < 4 || photoRingArea(ring) < 2.2) { continue; }
       d += photoSmoothPath(ring);
     }
     if (d) {
@@ -3333,15 +3390,19 @@ function photoCompose(seed, salt, key, chosen, P) {
   var s = ART_BG[bgKey](artDrawRng(seed, key, "bg", salt), P);
   var want = parseInt(chosen.grid, 10) || 48;
   var pixel = chosen.render === "Pixel";
-  var opts = pixel ? [48, 40, 32, 24] : [96, 80, 64, 48];
+  /* smooth rungs escalate the simplification eps as they coarsen, so the
+   * floor rung is guaranteed to fit even for a busy photograph */
+  var opts = pixel ? [[48, 0], [40, 0], [32, 0], [24, 0]]
+                   : [[96, 1.1], [80, 1.25], [64, 1.45], [48, 1.7],
+                      [40, 2.2], [32, 2.8]];
   if (!pixel) { want = want * 2; }
   var body = "";
   var G = want;
   for (var i = 0; i < opts.length; i++) {
-    if (opts[i] > want) { continue; }
-    G = opts[i];
+    if (opts[i][0] > want) { continue; }
+    G = opts[i][0];
     body = pixel ? photoDrawGrid(model, G, chosen.mode, chosen.outline, P)
-                 : photoTrace(model, G, chosen.mode, chosen.outline, P);
+                 : photoTrace(model, G, opts[i][1], chosen.mode, chosen.outline, P);
     if (body.length <= 11200) { break; }
   }
   return s + "<g transform='translate(40 40) scale(" + N(432 / G) + ")'" +
@@ -3383,6 +3444,34 @@ function artDefaultConfig(styleKey) {
   var extra = pack.slots();
   for (var i = 0; i < extra.length; i++) { slots.push(extra[i]); }
   return { style: styleKey, slots: slots };
+}
+
+/* saved configs age: packs gain/lose slots between releases (a pre-4.1.6
+ * photo config has no Render slot, so the choice never shows). Rebuild on
+ * the CURRENT slot set, carrying the user's on/weight edits across for
+ * every slot+variant that still exists. */
+function artMigrateConfig(cfg) {
+  if (!cfg || !cfg.style || !ART_STYLES[cfg.style]) { return cfg; }
+  var fresh = artDefaultConfig(cfg.style);
+  var old = {};
+  var i, j;
+  for (i = 0; i < (cfg.slots || []).length; i++) {
+    var os = cfg.slots[i];
+    for (j = 0; j < (os.variants || []).length; j++) {
+      old[os.key + "|" + os.variants[j].name] = os.variants[j];
+    }
+  }
+  for (i = 0; i < fresh.slots.length; i++) {
+    var vs = fresh.slots[i].variants;
+    for (j = 0; j < vs.length; j++) {
+      var saved = old[fresh.slots[i].key + "|" + vs[j].name];
+      if (saved) {
+        if (saved.on === false) { vs[j].on = false; }
+        if (typeof saved.weight === "number") { vs[j].weight = saved.weight; }
+      }
+    }
+  }
+  return fresh;
 }
 
 /* how many distinct trait combinations the enabled config allows */
@@ -3462,6 +3551,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     artSeed: artSeed, artRng: artRng, artPickWeighted: artPickWeighted,
     artDefaultConfig: artDefaultConfig, artCapacity: artCapacity,
+    artMigrateConfig: artMigrateConfig,
     artGenerate: artGenerate, artCollection: artCollection,
     artSetPhoto: artSetPhoto,
     ART_PALETTES: ART_PALETTES, ART_STYLES: ART_STYLES

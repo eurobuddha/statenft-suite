@@ -777,11 +777,13 @@ function artLoadStudio(cb) {
         var s = JSON.parse(res.value);
         if (s.cfgs) {
           ART_STUDIO = s;
-          /* drop configs for styles that no longer exist */
+          /* drop configs for styles that no longer exist; migrate the rest
+           * onto the current slot set (new slots appear with defaults,
+           * user rarity edits survive) */
           for (var k in ART_STUDIO.cfgs) {
-            if (ART_STUDIO.cfgs.hasOwnProperty(k) && !ART_STYLES[k]) {
-              delete ART_STUDIO.cfgs[k];
-            }
+            if (!ART_STUDIO.cfgs.hasOwnProperty(k)) { continue; }
+            if (!ART_STYLES[k]) { delete ART_STUDIO.cfgs[k]; }
+            else { ART_STUDIO.cfgs[k] = artMigrateConfig(ART_STUDIO.cfgs[k]); }
           }
         }
         if (!ART_STUDIO.preview) { ART_STUDIO.preview = 12; }

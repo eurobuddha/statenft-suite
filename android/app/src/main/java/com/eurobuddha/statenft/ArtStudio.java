@@ -67,6 +67,12 @@ public final class ArtStudio {
         eval("artDefaultConfig(" + JSONObject.quote(styleKey) + ")", v -> cb.accept(asObject(v)));
     }
 
+    /** Rebuild a saved config on the current slot set — packs gain slots
+     *  between releases and stale drafts would hide them (weights survive). */
+    public void migrate(JSONObject cfg, Consumer<JSONObject> cb) {
+        eval("artMigrateConfig(" + cfg.toString() + ")", v -> cb.accept(asObject(v)));
+    }
+
     /** Distinct trait combinations the config can yield. */
     public void capacity(JSONObject cfg, Consumer<Long> cb) {
         eval("artCapacity(" + cfg.toString() + ")", v -> {
