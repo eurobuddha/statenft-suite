@@ -174,6 +174,24 @@ public final class ImageTools {
         return px;
     }
 
+    /** jpeg b64 of a painted bitmap within the paint budget — largest
+     *  size/quality rung that fits wins (the Painted finish's image). */
+    public static String paintB64(Bitmap src, int budget) {
+        if (src == null) return "";
+        int[] dims = {384, 320, 256, 208};
+        int[] quals = {82, 72, 62, 50};
+        for (int dim : dims) {
+            Bitmap scaled = Bitmap.createScaledBitmap(src, dim, dim, true);
+            for (int q : quals) {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                scaled.compress(Bitmap.CompressFormat.JPEG, q, bos);
+                String b64 = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP);
+                if (b64.length() <= budget) return b64;
+            }
+        }
+        return "";
+    }
+
     private static String compressIconBitmap(Bitmap sq, int budget) {
         int[] dims = {512, 400, 320, 240, 180};
         for (int dim : dims) {

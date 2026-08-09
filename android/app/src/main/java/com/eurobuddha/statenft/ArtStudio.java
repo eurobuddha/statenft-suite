@@ -87,12 +87,16 @@ public final class ArtStudio {
     }
 
     /** Quantize a 96x96 RGBA array (a JSON int array, w*h*4 long) into the
-     *  photo pack's master grid via photoQuantize + artSetPhoto. The master
-     *  lives in the WebView for the process lifetime — same as the MiniDapp
-     *  page session. cb receives the palette size (0 = failed). */
-    public void setPhoto(String rgbaJson, Consumer<Integer> cb) {
-        eval("(function(){try{artSetPhoto(photoQuantize(" + rgbaJson
-                        + ",96,96,8));return ART_PHOTO_SRC.palette.length;}"
+     *  photo pack's master grid via photoQuantize + artSetPhoto, with an
+     *  optional jpeg-b64 painting riding along for the Painted finish. The
+     *  master lives in the WebView for the process lifetime — same as the
+     *  MiniDapp page session. cb receives the palette size (0 = failed). */
+    public void setPhoto(String rgbaJson, int colors, String paintB64, Consumer<Integer> cb) {
+        String paint = paintB64 == null || paintB64.isEmpty()
+                ? "null" : JSONObject.quote(paintB64);
+        eval("(function(){try{var m=photoQuantize(" + rgbaJson + ",96,96," + colors + ");"
+                        + "var p=" + paint + ";if(p){m.paint=p;}artSetPhoto(m);"
+                        + "return ART_PHOTO_SRC.palette.length;}"
                         + "catch(e){artSetPhoto(null);return 0;}})()",
                 v -> {
                     int k;

@@ -135,6 +135,26 @@ function artAiCartoonize(cv512, cb) {
   });
 }
 
+/* jpeg b64 of the painted canvas within the paint budget — largest rung
+ * that fits wins. 10800 b64 chars of paint leaves the whole Painted plate
+ * (bg + image element + overlay, then base64'd for coin state) under the
+ * 16000 budget with margin. */
+var ART_PAINT_BUDGET = 10800;
+function artPaintB64(cv) {
+  var dims = [384, 320, 256, 208];
+  var quals = [0.82, 0.72, 0.62, 0.5];
+  for (var d = 0; d < dims.length; d++) {
+    var oc = document.createElement("canvas");
+    oc.width = dims[d]; oc.height = dims[d];
+    oc.getContext("2d").drawImage(cv, 0, 0, 512, 512, 0, 0, dims[d], dims[d]);
+    for (var q = 0; q < quals.length; q++) {
+      var b64 = oc.toDataURL("image/jpeg", quals[q]).split(",")[1];
+      if (b64.length <= ART_PAINT_BUDGET) { return b64; }
+    }
+  }
+  return "";
+}
+
 $("photo-file").onchange = function () {
   var f = this.files && this.files[0];
   this.value = "";   // re-picking the same file must re-fire
@@ -159,7 +179,11 @@ $("photo-file").onchange = function () {
         var data;
         try { data = cx.getImageData(0, 0, 96, 96).data; }
         catch (e) { toast("could not read that image"); artPhotoSync(); return; }
-        artSetPhoto(photoQuantize(data, 96, 96, 8));
+        /* AI paintings are flat — they afford a richer 10-color trace; the
+         * painting itself rides along for the Painted finish */
+        var model = photoQuantize(data, 96, 96, toon ? 10 : 8);
+        if (toon) { model.paint = artPaintB64(toon); }
+        artSetPhoto(model);
         $("photo-drop").style.backgroundImage =
           "url(\"" + src.toDataURL("image/jpeg", 0.8) + "\")";
         $("photo-hint").innerText = "";
@@ -802,7 +826,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.8", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.9", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

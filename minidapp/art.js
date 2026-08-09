@@ -2928,6 +2928,8 @@ function artSetPhoto(model) { ART_PHOTO_SRC = model || null; }
 
 function photoSlots() {
   return [
+    { key: "finish", label: "Finish", variants: [
+      { name: "Painted", weight: 58 }, { name: "Vector", weight: 42 } ] },
     { key: "render", label: "Render", variants: [
       { name: "Smooth", weight: 62 }, { name: "Pixel", weight: 38 } ] },
     { key: "grid", label: "Detail", variants: [
@@ -3388,6 +3390,17 @@ function photoCompose(seed, salt, key, chosen, P) {
   var bgKey = chosen.background === "Wash" ? "Wash" :
               chosen.background === "Grid" ? "Grid" : "Plain";
   var s = ART_BG[bgKey](artDrawRng(seed, key, "bg", salt), P);
+  /* Painted finish: the AI painting itself, as a jpeg riding inside the
+   * SVG — the only finish that IS what the model painted. Captured at
+   * intake within a byte budget that keeps the whole plate under 16000
+   * b64; with no photo loaded there is no paint, so fall through to the
+   * vector finishes (placeholder, tests, thumbnails). */
+  if (chosen.finish === "Painted" && model.paint) {
+    return s + "<image x='40' y='40' width='432' height='432' " +
+      "xlink:href='data:image/jpeg;base64," + model.paint + "'/>" +
+      "<g transform='translate(40 40) scale(9)'>" +
+      photoOverlay(chosen.overlay, 48, P) + "</g>";
+  }
   var want = parseInt(chosen.grid, 10) || 48;
   var pixel = chosen.render === "Pixel";
   /* smooth rungs escalate the simplification eps as they coarsen, so the
@@ -3511,7 +3524,8 @@ function artGenerate(collectionSeed, salt, cfg) {
   var P = artPaletteByName(chosen.palette, pack.palettes || ART_PALETTES);
   var g = pack.compose(collectionSeed, salt, styleKey, chosen, P);
 
-  var svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>" +
+  var svg = "<svg xmlns='http://www.w3.org/2000/svg' " +
+            "xmlns:xlink='http://www.w3.org/1999/xlink' viewBox='0 0 512 512'>" +
             g + "</svg>";
   var key = [];
   for (var t = 0; t < traits.length; t++) { key.push(traits[t].value); }

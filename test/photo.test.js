@@ -85,6 +85,12 @@ ok(qflat.palette.length === 1, "flat photo quantizes to a single color");
 /* ---- photo pack integration (the real-photo path, not the placeholder) ---- */
 
 var cfg = art.artDefaultConfig("photo");
+/* worst-case paint: a full-budget 10800-char b64 string, so every Painted
+ * draw in the sweeps below proves the budget holds at maximum paint size */
+var PAINT = "";
+while (PAINT.length < 10800) { PAINT += "QUJDRA=="; }
+PAINT = PAINT.slice(0, 10800);
+q1.paint = PAINT;
 art.artSetPhoto(q1);
 
 var a = art.artGenerate("photo-int-seed", "1", cfg);
@@ -137,11 +143,33 @@ for (var ci = 0; ci < col.items.length; ci++) {
 ok(!dup, "all 20 combos unique");
 ok(over === 0, "every item within the 16000B b64 budget");
 
-/* flat photo end-to-end (degenerate 1-color palette) */
+/* Painted finish: the AI painting rides inside the SVG */
+var soloP = art.artDefaultConfig("photo");
+for (var sp = 0; sp < soloP.slots.length; sp++) {
+  if (soloP.slots[sp].key === "finish") {
+    for (var pv = 0; pv < soloP.slots[sp].variants.length; pv++) {
+      soloP.slots[sp].variants[pv].on =
+        soloP.slots[sp].variants[pv].name === "Painted";
+    }
+  }
+}
+var pItem = art.artGenerate("painted-seed", "1", soloP);
+ok(pItem.svg.indexOf("<image ") !== -1 &&
+   pItem.svg.indexOf(PAINT.slice(0, 64)) !== -1,
+   "Painted finish embeds the painting");
+ok(b64(pItem.svg.length) <= 16000,
+   "full-budget Painted plate within 16000 b64 (" + b64(pItem.svg.length) + "B)");
+ok(pItem.svg === art.artGenerate("painted-seed", "1", soloP).svg,
+   "Painted draw is deterministic");
+
+/* flat photo end-to-end (degenerate 1-color palette, no paint) */
 art.artSetPhoto(qflat);
 var flatDraw = art.artGenerate("photo-flat-seed", "1", cfg);
 ok(flatDraw && flatDraw.svg.indexOf("NaN") === -1 &&
    b64(flatDraw.svg.length) <= 16000, "flat photo draws clean");
+var pFall = art.artGenerate("painted-seed", "1", soloP);
+ok(pFall.svg.indexOf("<image ") === -1,
+   "no paint -> Painted falls back to the vector finishes");
 
 /* ---- config migration: stale drafts must gain new slots, keep edits ---- */
 

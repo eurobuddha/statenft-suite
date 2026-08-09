@@ -54,6 +54,14 @@ stripped or forged.
 > drafts now migrate onto new pack slots automatically, and Android keeps a
 > disk cache of remote NFT icons so offline wallets keep their art.
 
+> **v4.1.9 — Paprika + the Painted finish.** The cartoonizer is now the
+> paprika AnimeGAN weights (user-chosen from a four-model bake-off on real
+> photos — bold painterly poster style), and the photo pack gains a
+> Finish slot: **Painted** plates carry the actual AI painting on-chain
+> (a compact jpeg riding inside the SVG, whole plate ≤16000 b64), Vector
+> plates stay flat-traced (now 10 colors from AI-flat sources). Stale
+> drafts migrate; both clients run the identical model.
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed
