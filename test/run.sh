@@ -23,8 +23,12 @@ echo "== engine (coin state, contract shape, adoption fingerprint)"
 node test/engine.test.js || fail=1
 echo
 
-echo "== generative art (18 packs: determinism, uniqueness, byte budget)"
+echo "== generative art (19 packs: determinism, uniqueness, byte budget)"
 node test/art.test.js || fail=1
+echo
+
+echo "== photo intake (median-cut quantizer + photo-pack integration)"
+node test/photo.test.js || fail=1
 echo
 
 echo "== send queue (pure planners)"
