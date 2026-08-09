@@ -21,8 +21,11 @@ function artActivateStyle(styleKey) {
 }
 artActivateStyle(ART_STUDIO.style);
 var ART_MAX_MINT = 20;
-var ART_EMBED_BUDGET = 8192;  // base64 bytes per item — every pack is tuned and
-                              // test-swept against this (fits 64KB TxPoW twice)
+var ART_EMBED_BUDGET = 16000; // base64 bytes per item — IMG_BUDGET's on-chain
+                              // proof (rides twice per transfer under the 64KB
+                              // TxPoW; image-budget-spike 2026-08-05). The 18
+                              // generative packs stay test-swept at 8192; the
+                              // photo pack uses the headroom.
 var ART_REDRAW_TIMER = null;
 
 function artSetStatus(id, msg, cls) {
@@ -74,6 +77,64 @@ function artRenderStylePicker() {
     })(sk);
   }
 }
+
+/* ---------- photo intake (pack: photo — pixel cartoon from a real photo) ----------
+ * The picked photo is center-cropped onto a 48x48 canvas, quantized to 8
+ * flat colors on-device (photo.js) and handed to artSetPhoto (art.js).
+ * Only the cartoon SVG is ever minted; the photo never leaves the page. */
+
+function artPhotoSync() {
+  $("photo-section").classList.toggle("hidden", ART_STUDIO.style !== "photo");
+  if (!ART_PHOTO_SRC) {
+    $("photo-hint").innerText = "+ choose photo";
+    $("photo-drop").style.backgroundImage = "";
+  }
+}
+
+$("photo-file").onchange = function () {
+  var f = this.files && this.files[0];
+  this.value = "";   // re-picking the same file must re-fire
+  if (!f) { return; }
+  var reader = new FileReader();
+  reader.onload = function () {
+    var img = new Image();
+    img.onload = function () {
+      var side = Math.min(img.width, img.height);
+      var sx = (img.width - side) / 2, sy = (img.height - side) / 2;
+      var cv = document.createElement("canvas");
+      cv.width = 48; cv.height = 48;
+      var cx = cv.getContext("2d");
+      cx.drawImage(img, sx, sy, side, side, 0, 0, 48, 48);
+      var data;
+      try { data = cx.getImageData(0, 0, 48, 48).data; }
+      catch (e) { toast("could not read that image"); return; }
+      artSetPhoto(photoQuantize(data, 48, 48, 8));
+      $("photo-drop").style.backgroundImage =
+        "url(\"" + cv.toDataURL("image/png") + "\")";
+      $("photo-hint").innerText = "";
+      delete STYLE_THUMBS.photo;   // style card now shows the cartoonized photo
+      if (ART_STUDIO.style !== "photo") {
+        artActivateStyle("photo");
+        artSaveStudio();
+      }
+      artRenderStylePicker();
+      artRenderSlots();
+      artRenderPreview();
+      toast("photo cartoonized on-device");
+    };
+    img.onerror = function () { toast("could not load that image"); };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(f);
+};
+
+$("photo-clear").onclick = function () {
+  artSetPhoto(null);
+  delete STYLE_THUMBS.photo;
+  artPhotoSync();
+  artRenderStylePicker();
+  artRenderPreview();
+};
 
 /* ---------- randomize controls ---------- */
 
@@ -187,6 +248,7 @@ function artRenderSlots() {
   }
   $("art-capacity").innerHTML = "trait space: <b>" +
     artCapacity(ART_CFG).toLocaleString() + "</b> distinct combinations";
+  artPhotoSync();
 }
 
 function artOnConfigChange() {
@@ -399,6 +461,11 @@ $("g-mint-btn").onclick = function () {
   var desc = $("g-desc").value.trim();
   var size = artMintSize();
   if (!name) { artSetStatus("g-status", "name required", "err"); return; }
+  if (ART_STUDIO.style === "photo" && !ART_PHOTO_SRC) {
+    artSetStatus("g-status",
+      "load a photo first — the placeholder bust never mints", "err");
+    return;
+  }
 
   var col = artCollection(ART_SEED, size, ART_CFG);
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }

@@ -9,6 +9,7 @@
 <script type="text/javascript" src="sanitize.js?v=414"></script>
 <script type="text/javascript" src="engine.js?v=414"></script>
 <script type="text/javascript" src="art.js?v=414"></script>
+<script type="text/javascript" src="photo.js?v=414"></script>
 <script type="text/javascript" src="sendall.js?v=414"></script>
 </head>
 <body>
@@ -270,8 +271,18 @@
 
       <div class="art-studio">
         <div>
-          <span class="flabel">Style &mdash; 18 on-chain SVG packs</span>
+          <span class="flabel">Style &mdash; 19 on-chain SVG packs</span>
           <div id="art-style-picker" class="style-picker"></div>
+          <div id="photo-section" class="hidden">
+            <span class="flabel" style="margin-top:1rem">Photo &mdash; cartoonized
+              on your device; only the cartoon is minted</span>
+            <label class="art-drop" id="photo-drop">
+              <span id="photo-hint">+ choose photo</span>
+              <input type="file" accept="image/*" class="slot-input" id="photo-file"/>
+            </label>
+            <button id="photo-clear" class="btn btn-ghost"
+                    style="margin-top:0.4rem">Clear photo</button>
+          </div>
           <span class="flabel" style="margin-top:1rem">Collection seed &mdash; same seed always reproduces the same art</span>
           <div class="seed-row">
             <input id="art-seed" type="text" value="atelier-genesis" spellcheck="false"/>
