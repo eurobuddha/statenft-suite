@@ -27,6 +27,7 @@
   <nav class="nav">
     <button id="tab-collections" class="tab tab-active">Catalogue</button>
     <button id="tab-create" class="tab">Studio</button>
+    <button id="tab-filtr" class="tab">Filtr</button>
   </nav>
 </header>
 
@@ -352,6 +353,98 @@
     </div><!-- /wiz-art -->
   </section>
 
+  <!-- ============ FILTR : image editor ============ -->
+  <section id="view-filtr" class="hidden">
+    <div id="filtr-unsupported" class="empty-state hidden">
+      <p class="empty-glyph">&#9670;</p>
+      <p>FILTR needs WebGL2, which this device's webview doesn't provide.
+         Open Atelier on a desktop browser or a newer device.</p>
+    </div>
+    <div id="filtr-layout" class="filtr-layout">
+      <div class="filtr-rail">
+        <div class="filtr-panel">
+          <p class="wizard-kick">Import</p>
+          <label class="art-drop filtr-drop" id="filtr-drop">
+            <span id="filtr-drop-hint">+ drop / tap to choose &middot; paste &#8984;V</span>
+            <input type="file" accept="image/*" class="slot-input" id="filtr-file"/>
+          </label>
+          <p class="filtr-meta mono" id="filtr-meta">no image loaded</p>
+        </div>
+        <div class="filtr-panel">
+          <p class="wizard-kick">Effects</p>
+          <div id="filtr-fx-list"></div>
+        </div>
+        <div class="filtr-panel">
+          <p class="wizard-kick">Presets</p>
+          <div id="filtr-presets" class="filtr-presets"></div>
+        </div>
+      </div>
+      <div class="filtr-center">
+        <div class="toolbar filtr-toolbar">
+          <button class="filtr-tool" id="filtr-tool-crop">Crop</button>
+          <button class="filtr-tool" id="filtr-rotl" title="rotate left">&#10226;</button>
+          <button class="filtr-tool" id="filtr-rotr" title="rotate right">&#10227;</button>
+          <button class="filtr-tool" id="filtr-fliph">Flip H</button>
+          <button class="filtr-tool" id="filtr-flipv">Flip V</button>
+          <button class="filtr-tool" id="filtr-tool-erase">Erase</button>
+          <button class="filtr-tool" id="filtr-resize">Resize</button>
+          <button class="filtr-tool" id="filtr-tool-bubble">Bubble</button>
+          <button class="filtr-tool" id="filtr-tool-text">Text</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="filtr-tool" id="filtr-undo">Undo</button>
+          <button class="filtr-tool" id="filtr-redo">Redo</button>
+          <button class="filtr-tool warn" id="filtr-ab" title="hold to compare">A/B</button>
+          <button class="filtr-tool" id="filtr-fit">Fit</button>
+          <span class="filtr-note" id="filtr-zoominfo"></span>
+        </div>
+        <div class="filtr-stage" id="filtr-stage">
+          <div id="filtr-zoomwrap" class="filtr-zoomwrap">
+            <canvas id="filtr-canvas"></canvas>
+            <div id="filtr-overlay" class="filtr-overlay"></div>
+            <div id="filtr-cropbox" class="filtr-cropbox hidden"></div>
+          </div>
+        </div>
+        <div class="toolbar filtr-toolbar" id="filtr-toolopts"></div>
+        <div class="toolbar filtr-toolbar">
+          <button class="btn btn-gold" id="filtr-apply"
+                  title="bake the current look into the image, then layer the next effect">
+            Apply &mdash; bake &amp; continue</button>
+          <p id="filtr-status" class="modal-status" style="margin:0"></p>
+        </div>
+      </div>
+      <div class="filtr-rail">
+        <div class="filtr-acc open">
+          <h4><span id="filtr-fx-name">Effect</span><span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-fx-controls"></div>
+        </div>
+        <div class="filtr-acc open">
+          <h4>Adjustments<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-adjust-controls"></div>
+        </div>
+        <div class="filtr-acc">
+          <h4>Post FX<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-post-controls"></div>
+        </div>
+        <div class="filtr-acc">
+          <h4>Annotate<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-annotate-controls"></div>
+        </div>
+        <div class="filtr-acc open">
+          <h4>Save<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody">
+            <button class="btn btn-gold filtr-savebtn" id="filtr-save-mint">Send to NFT mint &rarr;</button>
+            <button class="btn filtr-savebtn" id="filtr-save-photo">Send to Photo Cartoon &rarr;</button>
+            <button class="btn btn-ghost filtr-savebtn" id="filtr-save-png">Download PNG</button>
+            <button class="btn btn-ghost filtr-savebtn" id="filtr-save-jpg">Download JPG</button>
+            <p class="cert-note">Everything runs on this device. Send-to-mint
+              compresses the flattened image into the Single-NFT wizard
+              (&le;9000 b64); Photo Cartoon feeds it to the AI collection pack.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ DETAIL : Catalogue Raisonné ============ -->
   <section id="view-detail" class="hidden">
     <button id="back-btn" class="btn btn-ghost btn-back">&larr; Collections</button>
@@ -612,5 +705,7 @@
 
 <script type="text/javascript" src="app.js?v=4110"></script>
 <script type="text/javascript" src="art-studio.js?v=4110"></script>
+<script type="text/javascript" src="filtr-engine.js?v=4110"></script>
+<script type="text/javascript" src="filtr.js?v=4110"></script>
 </body>
 </html>

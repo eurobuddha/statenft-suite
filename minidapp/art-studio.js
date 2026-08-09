@@ -155,6 +155,41 @@ function artPaintB64(cv) {
   return "";
 }
 
+/* the shared intake core: a 512x512 square canvas in, the photo pack
+ * loaded (AI cartoonize -> quantize -> paint) — used by the file picker
+ * below AND by FILTR's "Send to Photo Cartoon" handoff */
+function artPhotoIntake(big) {
+  $("photo-hint").innerText = "cartoonizing…";
+  artAiCartoonize(big, function (toon) {
+    var src = toon || big;
+    if (!toon) { toast("AI engine unavailable — direct trace used"); }
+    var cv = document.createElement("canvas");
+    cv.width = 96; cv.height = 96;
+    var cx = cv.getContext("2d");
+    cx.drawImage(src, 0, 0, 512, 512, 0, 0, 96, 96);
+    var data;
+    try { data = cx.getImageData(0, 0, 96, 96).data; }
+    catch (e) { toast("could not read that image"); artPhotoSync(); return; }
+    /* AI paintings are flat — they afford a richer 10-color trace; the
+     * painting itself rides along for the Painted finish */
+    var model = photoQuantize(data, 96, 96, toon ? 10 : 8);
+    if (toon) { model.paint = artPaintB64(toon); }
+    artSetPhoto(model);
+    $("photo-drop").style.backgroundImage =
+      "url(\"" + src.toDataURL("image/jpeg", 0.8) + "\")";
+    $("photo-hint").innerText = "";
+    delete STYLE_THUMBS.photo;   // style card now shows the cartoonized photo
+    if (ART_STUDIO.style !== "photo") {
+      artActivateStyle("photo");
+      artSaveStudio();
+    }
+    artRenderStylePicker();
+    artRenderSlots();
+    artRenderPreview();
+    toast(toon ? "photo AI-cartoonized on-device" : "photo traced on-device");
+  });
+}
+
 $("photo-file").onchange = function () {
   var f = this.files && this.files[0];
   this.value = "";   // re-picking the same file must re-fire
@@ -168,35 +203,7 @@ $("photo-file").onchange = function () {
       var big = document.createElement("canvas");
       big.width = 512; big.height = 512;
       big.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, 512, 512);
-      $("photo-hint").innerText = "cartoonizing…";
-      artAiCartoonize(big, function (toon) {
-        var src = toon || big;
-        if (!toon) { toast("AI engine unavailable — direct trace used"); }
-        var cv = document.createElement("canvas");
-        cv.width = 96; cv.height = 96;
-        var cx = cv.getContext("2d");
-        cx.drawImage(src, 0, 0, 512, 512, 0, 0, 96, 96);
-        var data;
-        try { data = cx.getImageData(0, 0, 96, 96).data; }
-        catch (e) { toast("could not read that image"); artPhotoSync(); return; }
-        /* AI paintings are flat — they afford a richer 10-color trace; the
-         * painting itself rides along for the Painted finish */
-        var model = photoQuantize(data, 96, 96, toon ? 10 : 8);
-        if (toon) { model.paint = artPaintB64(toon); }
-        artSetPhoto(model);
-        $("photo-drop").style.backgroundImage =
-          "url(\"" + src.toDataURL("image/jpeg", 0.8) + "\")";
-        $("photo-hint").innerText = "";
-        delete STYLE_THUMBS.photo;   // style card now shows the cartoonized photo
-        if (ART_STUDIO.style !== "photo") {
-          artActivateStyle("photo");
-          artSaveStudio();
-        }
-        artRenderStylePicker();
-        artRenderSlots();
-        artRenderPreview();
-        toast(toon ? "photo AI-cartoonized on-device" : "photo traced on-device");
-      });
+      artPhotoIntake(big);
     };
     img.onerror = function () { toast("could not load that image"); };
     img.src = reader.result;

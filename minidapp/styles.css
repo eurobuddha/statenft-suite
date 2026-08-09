@@ -704,3 +704,117 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
 
 .modal-status.err { color: var(--verm); }
 .modal-status.ok { color: var(--ink); }
+
+/* ==================== FILTR — image editor tab ==================== */
+
+.filtr-layout {
+  display: grid; grid-template-columns: 225px 1fr 265px;
+  gap: 1rem; align-items: start; margin-top: 1.2rem;
+}
+.filtr-rail { display: flex; flex-direction: column; gap: 0.9rem; min-width: 0; }
+.filtr-panel {
+  background: var(--card); border: 2px solid var(--ink);
+  box-shadow: var(--shadow-sm); padding: 0.8rem;
+}
+.filtr-drop { aspect-ratio: 16 / 7; font-size: 0.7rem; }
+.filtr-meta { font-size: 0.62rem; color: var(--dim); margin: 0.5rem 0 0; }
+.filtr-fx {
+  font: 600 0.68rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 0.3rem 0.35rem; color: var(--dim); cursor: pointer;
+}
+.filtr-fx.on {
+  color: var(--ink); background: var(--paper);
+  border-left: 3px solid var(--verm); padding-left: 0.5rem;
+}
+.filtr-presets { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
+.filtr-preset {
+  border: 1.5px solid var(--ink); background: var(--paper); cursor: pointer;
+  font: 600 0.55rem var(--sans); letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 0.4rem 0.15rem;
+}
+.filtr-preset:hover { background: var(--card); }
+.filtr-toolbar { margin-bottom: 0.55rem; gap: 0.35rem; }
+.filtr-tool {
+  border: 1.5px solid var(--ink); background: var(--card); cursor: pointer;
+  font: 800 0.6rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 0.42rem 0.55rem;
+}
+.filtr-tool.on { background: var(--ink); color: #fff; }
+.filtr-tool.warn { border-color: var(--verm); color: var(--verm); }
+.filtr-tool:disabled { opacity: 0.35; cursor: default; }
+.filtr-note { font: 0.62rem var(--mono); color: var(--dim); }
+.filtr-brushrange { width: 110px; accent-color: var(--verm); }
+.filtr-stage {
+  position: relative; overflow: hidden; touch-action: none;
+  border: 2px solid var(--ink); box-shadow: var(--shadow);
+  height: min(62vh, 640px);
+  background:
+    repeating-conic-gradient(#E8E7E1 0 25%, #F7F6F1 0 50%) 0 0 / 18px 18px;
+}
+.filtr-zoomwrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.filtr-zoomwrap canvas { display: block; }
+.filtr-overlay { position: absolute; inset: 0; }
+.filtr-ann {
+  position: absolute; white-space: nowrap; cursor: move; user-select: none;
+  border: 2.5px solid; border-radius: 16px; padding: 0.45em 0.8em;
+  box-shadow: 3px 3px 0 rgba(17,17,17,0.85);
+}
+.filtr-ann-thought { border-radius: 50%; }
+.filtr-ann-box { border-radius: 0; }
+.filtr-ann-shout { border-radius: 4px; transform: rotate(-2deg); }
+.filtr-ann-text { border: none; box-shadow: none; padding: 0; }
+.filtr-ann.sel { outline: 2px dashed var(--verm); outline-offset: 3px; }
+.filtr-tail {
+  position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--verm); border: 2px solid #fff; pointer-events: none;
+  opacity: 0; 
+}
+.filtr-ann.sel .filtr-tail { opacity: 0.9; }
+.filtr-cropbox {
+  position: absolute; border: 2px dashed var(--verm);
+  background: rgba(230, 51, 18, 0.06); pointer-events: none;
+}
+.filtr-cropbox::after {
+  content: attr(data-size); position: absolute; top: -1.3rem; left: 0;
+  font: 700 0.58rem var(--mono); color: var(--verm); letter-spacing: 0.1em;
+}
+.filtr-acc { border: 1.5px solid var(--ink); background: var(--card); margin-bottom: 0.55rem; }
+.filtr-acc h4 {
+  margin: 0; font: 800 0.62rem var(--sans); letter-spacing: 0.16em;
+  text-transform: uppercase; padding: 0.5rem 0.6rem; cursor: pointer;
+  display: flex; justify-content: space-between;
+}
+.filtr-acc h4 .arr { color: var(--verm); }
+.filtr-acc .filtr-accbody { display: none; padding: 0.35rem 0.6rem 0.6rem; }
+.filtr-acc.open .filtr-accbody { display: block; }
+.filtr-crow { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.4rem; }
+.filtr-crow label {
+  font: 600 0.56rem var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--dim); width: 74px; flex: none;
+}
+.filtr-crow input[type=range] { flex: 1; min-width: 0; accent-color: var(--verm); }
+.filtr-crow input[type=text], .filtr-crow select {
+  flex: 1; min-width: 0; border: 1.5px solid var(--ink); background: var(--paper);
+  font: 0.66rem var(--mono); padding: 0.25rem 0.3rem;
+}
+.filtr-crow input[type=color] { width: 42px; height: 24px; border: 1.5px solid var(--ink); padding: 0; background: none; }
+.filtr-val { font: 0.6rem var(--mono); width: 36px; text-align: right; flex: none; }
+.filtr-segs { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.filtr-seg {
+  border: 1.5px solid var(--ink); background: var(--card); cursor: pointer;
+  font: 700 0.52rem var(--sans); text-transform: uppercase; padding: 0.2rem 0.4rem;
+  color: var(--dim);
+}
+.filtr-seg.on { background: var(--ink); color: #fff; }
+.filtr-postrow {
+  display: flex; justify-content: space-between; align-items: center;
+  font: 600 0.6rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0.3rem 0;
+}
+.filtr-postrow input { accent-color: var(--verm); }
+.filtr-postsub { padding-left: 0.4rem; border-left: 2px solid var(--soft); margin-bottom: 0.4rem; }
+.filtr-savebtn { width: 100%; margin-bottom: 0.4rem; text-align: center; }
+@media (max-width: 900px) {
+  .filtr-layout { grid-template-columns: 1fr; }
+  .filtr-stage { height: 52vh; }
+}

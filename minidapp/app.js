@@ -211,12 +211,13 @@ function attachShield(container, cls, tid) {
 /* ---------- navigation ---------- */
 
 function show(view) {
-  ["view-collections", "view-create", "view-detail"].forEach(function (v) {
+  ["view-collections", "view-create", "view-filtr", "view-detail"].forEach(function (v) {
     $(v).classList.add("hidden");
   });
   $(view).classList.remove("hidden");
   $("tab-collections").classList.toggle("tab-active", view === "view-collections");
   $("tab-create").classList.toggle("tab-active", view === "view-create");
+  $("tab-filtr").classList.toggle("tab-active", view === "view-filtr");
 }
 
 /* ---------- collections home ---------- */
@@ -1487,6 +1488,7 @@ MDS.init(function (msg) {
 
 $("tab-collections").onclick = function () { show("view-collections"); loadCollectionList(); };
 $("tab-create").onclick = function () { show("view-create"); rebuildSlots(); };
+$("tab-filtr").onclick = function () { show("view-filtr"); filtrEnter(); };
 $("back-btn").onclick = function () { show("view-collections"); loadCollectionList(); };
 $("open-btn").onclick = function () { openExternal($("tokenid-input").value); };
 $("tokenid-input").addEventListener("keydown", function (e) {

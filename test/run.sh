@@ -39,6 +39,10 @@ echo "== art studio (stub DOM: bindings + index.html id cross-check)"
 node test/art-studio.test.js || fail=1
 echo
 
+echo "== filtr (engine surface + tab bindings + schema/id drift)"
+node test/filtr.test.js || fail=1
+echo
+
 echo "== cli (bury / transfer / mint parity)"
 python3 test/test_cli.py || fail=1
 echo
