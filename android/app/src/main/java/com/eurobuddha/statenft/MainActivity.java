@@ -50,6 +50,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private static final int PICK_NFT = 3;
     private static final int PICK_TOKICON = 5;
     private static final int PICK_COLLICON = 6;
+    private static final int PICK_ARTPHOTO = 7;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayList<StateNft.Meta> collections = new ArrayList<>();
@@ -112,7 +113,11 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private String pairKeyDraft = "", pairValueDraft = "";
 
     /* generative studio (artBox packs via ArtStudio bridge) */
-    private static final int ART_EMBED_BUDGET = 8192;  // b64 chars per SVG — every pack is tuned+tested to this
+    private static final int ART_EMBED_BUDGET = 16000; // b64 chars per SVG — STATE_IMG_BUDGET's
+                                                       // transfer-proven envelope (rides twice per
+                                                       // transfer under the 64KB TxPoW). The 18
+                                                       // generative packs stay tuned+tested at
+                                                       // 8192; the photo pack uses the headroom.
     private static org.json.JSONArray ART_STYLE_LIST;  // [{key,label}] from art.js, cached for the process
     private static final java.util.HashMap<String, android.graphics.Bitmap> ART_THUMBS = new java.util.HashMap<>();
     private String artStyle = "mandala";
@@ -120,6 +125,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private final java.util.HashMap<String, JSONObject> artCfgs = new java.util.HashMap<>();
     private final java.util.HashSet<String> artOpenSlots = new java.util.HashSet<>();
     private JSONArray artItems = new JSONArray();
+    private boolean artPhotoLoaded = false;  // mirrors ART_PHOTO_SRC in the bridge WebView
     private final ArrayList<android.graphics.Bitmap> artPreviews = new ArrayList<>();
     private LinearLayout artSheetBox;                  // proof sheet + send button, hidden when stale
     private final Runnable artSaveRunnable = this::artSaveDraft;  // debounced: seed keystrokes
@@ -1868,7 +1874,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         hideNav();
         if (!artDraftLoaded) { artDraftLoaded = true; artLoadDraft(); }
 
-        body.addView(Design.lot(this, "The Generator — 18 on-chain SVG style packs"));
+        body.addView(Design.lot(this, "The Generator — 19 on-chain SVG style packs"));
         body.addView(Design.note(this, "Deterministic: the seed and style reproduce every "
                 + "plate byte-for-byte — the same design mints identically in the MiniDapp."), lpm(0, 4, 0, 12));
 
@@ -1942,6 +1948,41 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         HorizontalScroll styleScroll = new HorizontalScroll(this);
         styleScroll.addView(strip);
         body.addView(styleScroll, lpm(0, 0, 0, 14));
+
+        /* ---- photo intake (Photo Cartoon pack only) ---- */
+        if ("photo".equals(artStyle)) {
+            LinearLayout card = lotCard();
+            card.addView(Design.display(this, "Photo Cartoon", 13));
+            card.addView(Design.note(this, artPhotoLoaded
+                    ? "Photo loaded — every plate derives from its cartoon. "
+                      + "The original never leaves the phone."
+                    : "Pick a photo: it is cartoonized on-device (48px, 8 flat "
+                      + "colors) and becomes the base for every plate. Without "
+                      + "one the pack draws a placeholder bust that never mints."));
+            LinearLayout row = horizontal(Gravity.CENTER_VERTICAL);
+            TextView pick = Design.button(this,
+                    artPhotoLoaded ? "Change photo" : "Choose photo", true);
+            pick.setOnClickListener(v -> {
+                pendingPickContext = PICK_ARTPHOTO;
+                pendingBatchImages = false;
+                launchPicker(false);
+            });
+            row.addView(pick, weight(46, 0, artPhotoLoaded ? 4 : 0));
+            if (artPhotoLoaded) {
+                TextView clear = Design.button(this, "Clear", false);
+                clear.setOnClickListener(v -> ArtStudio.with(this, s ->
+                        s.clearPhoto(() -> {
+                            artPhotoLoaded = false;
+                            ART_THUMBS.remove("photo");
+                            artItems = new JSONArray();
+                            artPreviews.clear();
+                            if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+                        })));
+                row.addView(clear, weight(46, 4, 0));
+            }
+            card.addView(row, lpm(0, 8, 0, 0));
+            body.addView(card, lpm(0, 0, 0, 14));
+        }
 
         /* ---- seed ---- */
         body.addView(Design.lot(this, "Collection seed — same seed, same art, forever"));
@@ -2224,6 +2265,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     private void sendArtToCollection() {
         if (artItems.length() == 0 || genBusy) return;
+        if ("photo".equals(artStyle) && !artPhotoLoaded) {
+            toast("Load a photo first — the placeholder never mints");
+            return;
+        }
         genBusy = true;
         renderGenerative();
         final JSONArray itemsF = artItems;
@@ -2304,6 +2349,20 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 renderCreateCollection();
             });
         }).start();
+    }
+
+    /** ARGB pixels -> the flat [r,g,b,a,...] JSON array photoQuantize expects. */
+    private static String artRgbaJson(int[] px) {
+        StringBuilder sb = new StringBuilder(px.length * 12 + 2);
+        sb.append('[');
+        for (int i = 0; i < px.length; i++) {
+            int p = px[i];
+            if (i > 0) sb.append(',');
+            sb.append((p >> 16) & 255).append(',').append((p >> 8) & 255)
+              .append(',').append(p & 255).append(",255");
+        }
+        sb.append(']');
+        return sb.toString();
     }
 
     /* ---- studio draft: style + seed + edited configs survive restarts ---- */
@@ -3069,6 +3128,26 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         pendingBatchImages = false;
         pendingPickContext = PICK_CREATE;
         pendingRecoveryId = 0;
+        if (context == PICK_ARTPHOTO) {
+            final Uri photoUri = uris.get(0);
+            new Thread(() -> {
+                int[] px = ImageTools.gridPixels(this, photoUri, 48);
+                final String rgba = px == null ? null : artRgbaJson(px);
+                runOnUiThread(() -> {
+                    if (rgba == null) { toast("Could not read that photo"); return; }
+                    ArtStudio.with(this, s -> s.setPhoto(rgba, k -> {
+                        artPhotoLoaded = k > 0;
+                        ART_THUMBS.remove("photo");
+                        artItems = new JSONArray();
+                        artPreviews.clear();
+                        toast(artPhotoLoaded ? "Photo cartoonized on-device"
+                                : "Could not process that photo");
+                        if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+                    }));
+                });
+            }).start();
+            return;
+        }
         int budget = context == PICK_NFT ? ImageTools.ARTIMAGE_BUDGET
                 : (context == PICK_TOKICON || context == PICK_COLLICON) ? ImageTools.ICON_BUDGET
                 : ImageTools.STATE_IMG_BUDGET;

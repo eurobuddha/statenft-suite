@@ -143,6 +143,31 @@ public final class ImageTools {
         return Bitmap.createBitmap(src, x, y, side, side);
     }
 
+    /** EXIF-correct n×n pixel grid for the generative photo pack: decode
+     *  small via ImageDecoder (orientation applied once), center-crop
+     *  square, scale to n. Returns ARGB ints or null. */
+    public static int[] gridPixels(Context c, Uri uri, int n) {
+        try {
+            ImageDecoder.Source src = ImageDecoder.createSource(c.getContentResolver(), uri);
+            Bitmap bmp = ImageDecoder.decodeBitmap(src, (d, info, s) -> {
+                d.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight();
+                int max = Math.max(w, h);
+                if (max > 512) {
+                    float f = 512f / max;
+                    d.setTargetSize(Math.max(1, Math.round(w * f)), Math.max(1, Math.round(h * f)));
+                }
+            });
+            if (bmp == null) return null;
+            Bitmap g = Bitmap.createScaledBitmap(centerSquare(bmp), n, n, true);
+            int[] px = new int[n * n];
+            g.getPixels(px, 0, n, 0, 0, n, n);
+            return px;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static String compressIconBitmap(Bitmap sq, int budget) {
         int[] dims = {512, 400, 320, 240, 180};
         for (int dim : dims) {

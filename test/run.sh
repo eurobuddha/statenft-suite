@@ -54,6 +54,20 @@ else
 fi
 echo
 
+echo "== android bridge parity (assets/artstudio mirrors minidapp)"
+# The Android app runs art.js/photo.js VERBATIM in a hidden WebView — the same
+# seed must draw byte-identical art on both clients. Drift here forks the art.
+BRIDGE=android/app/src/main/assets/artstudio
+for f in art.js photo.js; do
+  if diff -q "minidapp/$f" "$BRIDGE/$f" >/dev/null 2>&1; then
+    echo "  ok    $f byte-identical in the Android bridge"
+  else
+    echo "  FAIL  $f differs between minidapp/ and $BRIDGE — re-copy it"
+    fail=1
+  fi
+done
+echo
+
 echo "== version + cache-busters (dapp.conf / index.html / footer agree)"
 VER=$(python3 -c "import json;print(json.load(open('minidapp/dapp.conf'))['version'])")
 BUST=$(echo "$VER" | tr -d '.')

@@ -80,6 +80,26 @@ public final class ArtStudio {
                 v -> cb.accept(asObject(v)));
     }
 
+    /** Quantize a 48x48 RGBA array (a JSON int array, w*h*4 long) into the
+     *  photo pack's master grid via photoQuantize + artSetPhoto. The master
+     *  lives in the WebView for the process lifetime — same as the MiniDapp
+     *  page session. cb receives the palette size (0 = failed). */
+    public void setPhoto(String rgbaJson, Consumer<Integer> cb) {
+        eval("(function(){try{artSetPhoto(photoQuantize(" + rgbaJson
+                        + ",48,48,8));return ART_PHOTO_SRC.palette.length;}"
+                        + "catch(e){artSetPhoto(null);return 0;}})()",
+                v -> {
+                    int k;
+                    try { k = Integer.parseInt(v.trim()); } catch (Exception e) { k = 0; }
+                    cb.accept(k);
+                });
+    }
+
+    /** Drop the loaded photo — the pack reverts to its placeholder bust. */
+    public void clearPhoto(Runnable done) {
+        eval("(artSetPhoto(null),0)", v -> { if (done != null) done.run(); });
+    }
+
     /** The style-card thumbnail SVG (fixed seed, so cards are stable). */
     public void thumb(String styleKey, Consumer<String> cb) {
         eval("(artGenerate('artbox-style-card','1',artDefaultConfig(" + JSONObject.quote(styleKey)
