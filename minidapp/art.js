@@ -2913,12 +2913,14 @@ function pandasCompose(seed, salt, key, chosen, P) {
 /* ======================================================================
  * PACK: photo — a real photo as a pixel cartoon
  *
- * The page center-crops the picked photo onto a 48x48 canvas, quantizes it
+ * The page center-crops the picked photo onto a 96x96 canvas, quantizes it
  * to 8 flat colors on-device (photo.js) and hands the master grid to
- * artSetPhoto(). Every variant re-derives from that master: grid size,
- * palette re-light, cartoon edge ink, overlays. With no photo loaded the
- * pack draws a seeded placeholder bust — that is what the tests sweep and
- * what the style card shows; the studio refuses to mint it.
+ * artSetPhoto(). Every variant re-derives from that master: Smooth render
+ * (marching-squares contours simplified into curved flat regions — the
+ * default) or Pixel mosaic, grid size, palette re-light, cartoon edge ink,
+ * overlays. With no photo loaded the pack draws a seeded placeholder bust —
+ * that is what the tests sweep and what the style card shows; the studio
+ * refuses to mint it.
  * ====================================================================== */
 
 var ART_PHOTO_SRC = null;
@@ -2926,7 +2928,9 @@ function artSetPhoto(model) { ART_PHOTO_SRC = model || null; }
 
 function photoSlots() {
   return [
-    { key: "grid", label: "Grid", variants: [
+    { key: "render", label: "Render", variants: [
+      { name: "Smooth", weight: 62 }, { name: "Pixel", weight: 38 } ] },
+    { key: "grid", label: "Detail", variants: [
       { name: "48", weight: 46 }, { name: "40", weight: 30 },
       { name: "32", weight: 24 } ] },
     { key: "mode", label: "Mode", variants: [
@@ -3108,17 +3112,169 @@ function photoDrawGrid(model, G, mode, outline, P) {
 }
 
 function photoOverlay(kind, G, P) {
+  /* pattern cells track the drawing's own resolution so the texture reads
+   * the same whether the g holds a 32px mosaic or a 96px trace */
+  var u = Math.max(1, I(G / 48));
   if (kind === "Scanlines") {
-    return "<defs><pattern id='pso' width='1' height='2' patternUnits='userSpaceOnUse'>" +
-      "<rect width='1' height='1' fill='" + P.ink + "' opacity='0.16'/></pattern></defs>" +
+    return "<defs><pattern id='pso' width='" + u + "' height='" + (2 * u) +
+      "' patternUnits='userSpaceOnUse'>" +
+      "<rect width='" + u + "' height='" + u + "' fill='" + P.ink +
+      "' opacity='0.16'/></pattern></defs>" +
       "<rect width='" + G + "' height='" + G + "' fill='url(#pso)'/>";
   }
   if (kind === "Dots") {
-    return "<defs><pattern id='pdo' width='2' height='2' patternUnits='userSpaceOnUse'>" +
-      "<circle cx='1' cy='1' r='0.45' fill='" + P.ink + "' opacity='0.2'/></pattern></defs>" +
+    return "<defs><pattern id='pdo' width='" + (2 * u) + "' height='" + (2 * u) +
+      "' patternUnits='userSpaceOnUse'>" +
+      "<circle cx='" + u + "' cy='" + u + "' r='" + N(0.45 * u) + "' fill='" + P.ink +
+      "' opacity='0.2'/></pattern></defs>" +
       "<rect width='" + G + "' height='" + G + "' fill='url(#pdo)'/>";
   }
   return "";
+}
+
+/* ---- Smooth render: marching-squares contours -> simplified curved regions ---- */
+
+/* boundary loops of a binary mask: directed unit segments (filled region on
+ * the right), chained head-to-tail into closed rings */
+function photoTraceLoops(mask, n) {
+  var segs = {};
+  function seg(x0, y0, x1, y1) {
+    var k = x0 + "," + y0;
+    if (!segs[k]) { segs[k] = []; }
+    segs[k].push([x1, y1]);
+  }
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      if (!mask[y * n + x]) { continue; }
+      if (y === 0 || !mask[(y - 1) * n + x]) { seg(x, y, x + 1, y); }
+      if (y === n - 1 || !mask[(y + 1) * n + x]) { seg(x + 1, y + 1, x, y + 1); }
+      if (x === 0 || !mask[y * n + x - 1]) { seg(x, y + 1, x, y); }
+      if (x === n - 1 || !mask[y * n + x + 1]) { seg(x + 1, y, x + 1, y + 1); }
+    }
+  }
+  var loops = [];
+  for (var start in segs) {
+    if (!segs.hasOwnProperty(start)) { continue; }
+    while (segs[start] && segs[start].length) {
+      var pts = [];
+      var cur = start.split(",");
+      cur = [parseInt(cur[0], 10), parseInt(cur[1], 10)];
+      pts.push(cur);
+      for (;;) {
+        var outs = segs[cur[0] + "," + cur[1]];
+        if (!outs || !outs.length) { break; }
+        cur = outs.pop();
+        pts.push(cur);
+        if (cur[0] + "," + cur[1] === start) { break; }
+      }
+      if (pts.length > 3) { loops.push(pts); }
+    }
+  }
+  return loops;
+}
+
+function photoMergeCollinear(pts) {
+  var out = [];
+  for (var i = 0; i < pts.length; i++) {
+    var a = out[out.length - 2], b = out[out.length - 1], c = pts[i];
+    if (a && b && (b[0] - a[0]) * (c[1] - a[1]) === (b[1] - a[1]) * (c[0] - a[0])) {
+      out[out.length - 1] = c;
+    } else { out.push(c); }
+  }
+  return out;
+}
+
+/* Douglas-Peucker on an open polyline */
+function photoDp(pts, eps) {
+  if (pts.length < 5) { return pts; }
+  var keep = [];
+  for (var z = 0; z < pts.length; z++) { keep.push(false); }
+  keep[0] = keep[pts.length - 1] = true;
+  var stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    var span = stack.pop();
+    var i0 = span[0], i1 = span[1];
+    var ax = pts[i0][0], ay = pts[i0][1];
+    var dx = pts[i1][0] - ax, dy = pts[i1][1] - ay;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var maxD = 0, maxI = -1;
+    for (var i = i0 + 1; i < i1; i++) {
+      var d = Math.abs(dx * (ay - pts[i][1]) - (ax - pts[i][0]) * dy) / len;
+      if (d > maxD) { maxD = d; maxI = i; }
+    }
+    if (maxD > eps) { keep[maxI] = true; stack.push([i0, maxI], [maxI, i1]); }
+  }
+  var out = [];
+  for (var j = 0; j < pts.length; j++) { if (keep[j]) { out.push(pts[j]); } }
+  return out;
+}
+
+/* closed ring: split at the vertex farthest from p0 and DP each open half —
+ * plain DP dies on rings because the first-to-last chord is a point */
+function photoDpClosed(pts, eps) {
+  if (pts.length < 5) { return pts; }
+  var far = 1, maxD = -1;
+  for (var i = 1; i < pts.length - 1; i++) {
+    var dx = pts[i][0] - pts[0][0], dy = pts[i][1] - pts[0][1];
+    var d = dx * dx + dy * dy;
+    if (d > maxD) { maxD = d; far = i; }
+  }
+  var a = photoDp(pts.slice(0, far + 1), eps);
+  var b = photoDp(pts.slice(far), eps);
+  return a.concat(b.slice(1));
+}
+
+/* closed polygon -> midpoint-quadratic smooth path (curves through the
+ * midpoint of every edge, each vertex becomes a control point) */
+function photoSmoothPath(pts) {
+  if (pts.length > 1 && pts[0][0] === pts[pts.length - 1][0] &&
+      pts[0][1] === pts[pts.length - 1][1]) {
+    pts = pts.slice(0, -1);
+  }
+  var m = pts.length;
+  if (m < 3) { return ""; }
+  var d = "M" + N((pts[0][0] + pts[1][0]) / 2) + " " + N((pts[0][1] + pts[1][1]) / 2);
+  for (var i = 1; i <= m; i++) {
+    var p = pts[i % m], q = pts[(i + 1) % m];
+    d += "Q" + N(p[0]) + " " + N(p[1]) + " " +
+         N((p[0] + q[0]) / 2) + " " + N((p[1] + q[1]) / 2);
+  }
+  return d + "z";
+}
+
+/* stacked curved regions: most-common color floods the frame, every other
+ * color is traced, simplified (eps ~1.1 cells) and drawn with a self-color
+ * (or ink) stroke that swallows the seams between smoothed neighbours */
+function photoTrace(model, G, mode, outline, P) {
+  var cells = photoSmooth(photoSmooth(photoResample(model.cells, model.cols, G), G), G);
+  var pal = photoPalette(model, mode, P);
+  var counts = {};
+  var i;
+  for (i = 0; i < cells.length; i++) { counts[cells[i]] = (counts[cells[i]] || 0) + 1; }
+  var order = [];
+  for (var k2 in counts) { if (counts.hasOwnProperty(k2)) { order.push(parseInt(k2, 10)); } }
+  order.sort(function (a, b) { return (counts[b] - counts[a]) || (a - b); });
+  var s = "<rect width='" + G + "' height='" + G + "' fill='" + pal[order[0]] + "'/>";
+  var ink = photoDarkest(pal);
+  for (var o = 1; o < order.length; o++) {
+    var ci = order[o];
+    var mask = [];
+    for (i = 0; i < cells.length; i++) { mask.push(cells[i] === ci ? 1 : 0); }
+    var loops = photoTraceLoops(mask, G);
+    var d = "";
+    for (var L = 0; L < loops.length; L++) {
+      var ring = photoDpClosed(photoMergeCollinear(loops[L]), 1.1);
+      if (ring.length < 5) { continue; }
+      d += photoSmoothPath(ring);
+    }
+    if (d) {
+      s += "<path fill='" + pal[ci] + "' stroke='" +
+           (outline === "Ink" ? ink : pal[ci]) + "' stroke-width='" +
+           (outline === "Ink" ? N(G / 64) : 0.7) +
+           "' stroke-linejoin='round' fill-rule='evenodd' d='" + d + "'/>";
+    }
+  }
+  return s;
 }
 
 /* seeded placeholder bust — drawn before any photo is loaded (and swept by
@@ -3167,25 +3323,29 @@ function photoPlaceholder(seed, key, salt, P) {
 }
 
 /* byte valve: photos are unpredictable — if a draw comes out too heavy for
- * the 16000 b64 budget, redraw at the next-coarser grid (deterministic;
- * 24x24 always fits) */
+ * the 16000 b64 budget, redraw at the next-coarser resolution
+ * (deterministic; the coarsest rung always fits). Smooth traces at 2x the
+ * Detail setting (96/80/64) — contours earn their bytes back in curves. */
 function photoCompose(seed, salt, key, chosen, P) {
   var model = ART_PHOTO_SRC || photoPlaceholder(seed, key, salt, P);
   var bgKey = chosen.background === "Wash" ? "Wash" :
               chosen.background === "Grid" ? "Grid" : "Plain";
   var s = ART_BG[bgKey](artDrawRng(seed, key, "bg", salt), P);
   var want = parseInt(chosen.grid, 10) || 48;
-  var opts = [48, 40, 32, 24];
+  var pixel = chosen.render === "Pixel";
+  var opts = pixel ? [48, 40, 32, 24] : [96, 80, 64, 48];
+  if (!pixel) { want = want * 2; }
   var body = "";
   var G = want;
   for (var i = 0; i < opts.length; i++) {
     if (opts[i] > want) { continue; }
     G = opts[i];
-    body = photoDrawGrid(model, G, chosen.mode, chosen.outline, P);
+    body = pixel ? photoDrawGrid(model, G, chosen.mode, chosen.outline, P)
+                 : photoTrace(model, G, chosen.mode, chosen.outline, P);
     if (body.length <= 11200) { break; }
   }
-  return s + "<g transform='translate(40 40) scale(" + N(432 / G) +
-    ")' shape-rendering='crispEdges'>" + body +
+  return s + "<g transform='translate(40 40) scale(" + N(432 / G) + ")'" +
+    (pixel ? " shape-rendering='crispEdges'" : "") + ">" + body +
     photoOverlay(chosen.overlay, G, P) + "</g>";
 }
 

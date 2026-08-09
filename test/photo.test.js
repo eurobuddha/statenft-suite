@@ -10,7 +10,7 @@ function ok(cond, msg) {
 }
 function b64(n) { return Math.ceil(n / 3) * 4; }
 
-/* deterministic photo-like 48x48 rgba: smooth gradients + regions + a touch
+/* deterministic photo-like rgba: smooth gradients + regions + a touch
  * of pseudo-noise (pure function of x,y — no Math.random) */
 function syntheticRgba(n) {
   var d = new Array(n * n * 4);
@@ -35,12 +35,12 @@ function syntheticRgba(n) {
 
 /* ---- quantizer ---- */
 
-var rgba = syntheticRgba(48);
-var q1 = photo.photoQuantize(rgba, 48, 48, 8);
-var q2 = photo.photoQuantize(rgba, 48, 48, 8);
+var rgba = syntheticRgba(96);
+var q1 = photo.photoQuantize(rgba, 96, 96, 8);
+var q2 = photo.photoQuantize(rgba, 96, 96, 8);
 ok(JSON.stringify(q1) === JSON.stringify(q2), "quantizer is deterministic");
-ok(q1.cols === 48 && q1.rows === 48 && q1.cells.length === 48 * 48,
-   "model shape: 48x48 master grid");
+ok(q1.cols === 96 && q1.rows === 96 && q1.cells.length === 96 * 96,
+   "model shape: 96x96 master grid (intake resolution)");
 ok(q1.palette.length >= 2 && q1.palette.length <= 8,
    "palette within k bound (" + q1.palette.length + " colors)");
 var hexOk = true, idxOk = true;

@@ -80,13 +80,13 @@ public final class ArtStudio {
                 v -> cb.accept(asObject(v)));
     }
 
-    /** Quantize a 48x48 RGBA array (a JSON int array, w*h*4 long) into the
+    /** Quantize a 96x96 RGBA array (a JSON int array, w*h*4 long) into the
      *  photo pack's master grid via photoQuantize + artSetPhoto. The master
      *  lives in the WebView for the process lifetime — same as the MiniDapp
      *  page session. cb receives the palette size (0 = failed). */
     public void setPhoto(String rgbaJson, Consumer<Integer> cb) {
         eval("(function(){try{artSetPhoto(photoQuantize(" + rgbaJson
-                        + ",48,48,8));return ART_PHOTO_SRC.palette.length;}"
+                        + ",96,96,8));return ART_PHOTO_SRC.palette.length;}"
                         + "catch(e){artSetPhoto(null);return 0;}})()",
                 v -> {
                     int k;

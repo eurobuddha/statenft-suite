@@ -1,9 +1,9 @@
 /* Atelier photo intake — deterministic median-cut color quantizer. ES5,
  * page-side only (service.js never loads this; the mint snapshots final
- * SVGs into SQL). The studio center-crops the picked photo onto a 48x48
+ * SVGs into SQL). The studio center-crops the picked photo onto a 96x96
  * canvas and feeds the ImageData here; the result is the master grid the
- * photo pack (art.js artSetPhoto) turns into pixel-cartoon variants.
- * Everything happens on-device — the original photo never leaves the page. */
+ * photo pack (art.js artSetPhoto) turns into smooth-vector or pixel
+ * variants. Everything happens on-device — the photo never leaves the page. */
 
 function pqHex2(v) {
   v = Math.max(0, Math.min(255, Math.round(v)));

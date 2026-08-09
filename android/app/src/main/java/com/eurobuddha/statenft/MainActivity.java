@@ -3131,7 +3131,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         if (context == PICK_ARTPHOTO) {
             final Uri photoUri = uris.get(0);
             new Thread(() -> {
-                int[] px = ImageTools.gridPixels(this, photoUri, 48);
+                int[] px = ImageTools.gridPixels(this, photoUri, 96);
                 final String rgba = px == null ? null : artRgbaJson(px);
                 runOnUiThread(() -> {
                     if (rgba == null) { toast("Could not read that photo"); return; }

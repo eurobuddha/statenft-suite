@@ -78,8 +78,8 @@ function artRenderStylePicker() {
   }
 }
 
-/* ---------- photo intake (pack: photo — pixel cartoon from a real photo) ----------
- * The picked photo is center-cropped onto a 48x48 canvas, quantized to 8
+/* ---------- photo intake (pack: photo — your photo as flat vector art) ----------
+ * The picked photo is center-cropped onto a 96x96 canvas, quantized to 8
  * flat colors on-device (photo.js) and handed to artSetPhoto (art.js).
  * Only the cartoon SVG is ever minted; the photo never leaves the page. */
 
@@ -102,13 +102,13 @@ $("photo-file").onchange = function () {
       var side = Math.min(img.width, img.height);
       var sx = (img.width - side) / 2, sy = (img.height - side) / 2;
       var cv = document.createElement("canvas");
-      cv.width = 48; cv.height = 48;
+      cv.width = 96; cv.height = 96;
       var cx = cv.getContext("2d");
-      cx.drawImage(img, sx, sy, side, side, 0, 0, 48, 48);
+      cx.drawImage(img, sx, sy, side, side, 0, 0, 96, 96);
       var data;
-      try { data = cx.getImageData(0, 0, 48, 48).data; }
+      try { data = cx.getImageData(0, 0, 96, 96).data; }
       catch (e) { toast("could not read that image"); return; }
-      artSetPhoto(photoQuantize(data, 48, 48, 8));
+      artSetPhoto(photoQuantize(data, 96, 96, 8));
       $("photo-drop").style.backgroundImage =
         "url(\"" + cv.toDataURL("image/png") + "\")";
       $("photo-hint").innerText = "";
