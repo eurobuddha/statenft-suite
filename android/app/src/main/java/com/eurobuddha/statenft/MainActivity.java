@@ -188,10 +188,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
         ViewCompat.setOnApplyWindowInsetsListener(rootFrame, (v, insets) -> {
             androidx.core.graphics.Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            androidx.core.graphics.Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             insetTop = sys.top;
             insetBottom = sys.bottom;
             appbarBox.setPadding(0, insetTop, 0, 0);
-            navBox.setPadding(0, 0, 0, insetBottom);
+            /* edge-to-edge opts out of adjustResize, so the keyboard must be
+             * handled here: pad the whole frame above the IME so focused
+             * fields scroll into view, and drop the nav-bar padding while the
+             * keyboard covers that bar anyway */
+            boolean imeOpen = ime.bottom > 0;
+            v.setPadding(0, 0, 0, imeOpen ? ime.bottom : 0);
+            navBox.setPadding(0, 0, 0, imeOpen ? 0 : insetBottom);
             overlay.setPadding(0, 0, 0, 0);
             return insets;
         });
