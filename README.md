@@ -3,7 +3,8 @@
 > **v2 — full suite**: the "StateNFT Suite" MiniDapp (uid `0x2E22FE01…`) now
 > creates, mints, views and transfers collections entirely in-app. Two image
 > modes: **embedded on-chain** (upload → auto-compressed thumbnail stored in
-> each coin's state port 1, ≤8KB base64 so transfers fit the 64KB TxPoW cap —
+> each coin's state port 1, ≤8KB base64 so transfers fit the 64KB TxPoW cap
+> (raised to 16000 b64 after the 2026-08-05 spike proof — see v4.1.5) —
 > transfers carry the image twice: input-coin proof + recreated output state)
 > or **hosted URLs**. Minting runs in `service.js` on every new block, so it
 > continues with the page closed, self-heals transient errors, and resumes
@@ -26,6 +27,16 @@ stripped or forged.
 > pre-3.3 collections (incl. DLNW) prevent identity *removal* but a holder
 > could *rewrite* state on coins they hold. Remedy for old collections:
 > re-mint as a locked edition.
+
+> **v4.1.5 — Photo Cartoon.** Atelier's Studio № 4 gains a 19th style pack:
+> pick a real photo (camera or gallery) and it is center-cropped, quantized
+> to 8 flat colors and cartoonized into a tiny pixel SVG — entirely
+> on-device; the original photo never leaves the page. The cartoon becomes
+> the base for a whole collection: grid 48/40/32, five palette re-lights
+> (Natural/Poster/Duotone/Mono/Invert), backgrounds, edge ink, overlays —
+> all deterministic and swept by tests. The generative art budget rises to
+> 16000 b64 per item (the transfer-proven envelope); the 18 original packs
+> stay tuned and test-swept at 8192.
 
 ## How it works
 
