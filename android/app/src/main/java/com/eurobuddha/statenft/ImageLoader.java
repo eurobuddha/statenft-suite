@@ -43,7 +43,7 @@ public final class ImageLoader {
         Bitmap cached = CACHE.get(key);
         if (cached != null) { iv.setImageBitmap(cached); return; }
         EXEC.execute(() -> {
-            final Bitmap b = decode(url, reqPx);
+            final Bitmap b = decode(act, url, reqPx);
             if (b == null) return;
             CACHE.put(key, b);
             act.runOnUiThread(() -> {
@@ -53,9 +53,9 @@ public final class ImageLoader {
         });
     }
 
-    static Bitmap decode(String url, int reqPx) {
+    static Bitmap decode(android.content.Context ctx, String url, int reqPx) {
         try {
-            byte[] bytes = url.startsWith("data:") ? dataUriBytes(url) : fetch(url);
+            byte[] bytes = url.startsWith("data:") ? dataUriBytes(url) : fetchCached(ctx, url);
             if (bytes == null || bytes.length == 0) return null;
             if (looksLikeSvg(bytes, url)) return renderSvg(bytes, reqPx);
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -101,6 +101,52 @@ public final class ImageLoader {
         int max = Math.max(w, h);
         while (max / s > reqPx) s <<= 1;
         return Math.max(1, s);
+    }
+
+    /* remote icons persist to disk so a wallet full of hosted-image NFTs
+     * still shows every once-seen icon offline (the identicon-fallback
+     * report: airplane mode turned the whole Singles wall into placeholders) */
+    private static final int DISK_MAX = 300;
+
+    private static java.io.File diskFile(android.content.Context ctx, String url) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] h = md.digest(url.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : h) sb.append(String.format("%02x", b));
+            java.io.File dir = new java.io.File(ctx.getCacheDir(), "nfticons");
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            return new java.io.File(dir, sb.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static byte[] fetchCached(android.content.Context ctx, String url) {
+        java.io.File f = ctx == null ? null : diskFile(ctx, url);
+        byte[] bytes = null;
+        try { bytes = fetch(url); } catch (Exception ignored) {}
+        if (bytes != null && bytes.length > 0) {
+            if (f != null) {
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                    out.write(bytes);
+                    trimDisk(f.getParentFile());
+                } catch (Exception ignored) {}
+            }
+            return bytes;
+        }
+        if (f != null && f.exists()) {                 // offline: serve the last-seen bytes
+            try { return java.nio.file.Files.readAllBytes(f.toPath()); }
+            catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private static void trimDisk(java.io.File dir) {
+        java.io.File[] all = dir == null ? null : dir.listFiles();
+        if (all == null || all.length <= DISK_MAX) return;
+        java.util.Arrays.sort(all, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        for (int i = 0; i < all.length - DISK_MAX; i++) all[i].delete();
     }
 
     private static byte[] fetch(String url) throws Exception {
