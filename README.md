@@ -45,6 +45,15 @@ stripped or forged.
 > Identical on both clients (the tracer ships verbatim in the Android
 > bridge).
 
+> **v4.1.7 — AI cartoonification.** The photo pack now runs a real neural
+> cartoonizer before the trace: AnimeGAN (face_paint_512_v2, ONNX) executes
+> ON-DEVICE — onnxruntime wasm in the MiniDapp, native onnxruntime on
+> Android — so the photo still never leaves the device. The painted output
+> feeds the same quantize+trace into on-chain SVG variants. If the engine
+> can't run, the direct trace is the honest fallback. Also: stale studio
+> drafts now migrate onto new pack slots automatically, and Android keeps a
+> disk cache of remote NFT icons so offline wallets keep their art.
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed
