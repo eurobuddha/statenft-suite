@@ -90,9 +90,32 @@ public class MintService extends Service {
             ch.setDescription("Live progress while collections seal on-chain");
             nm.createNotificationChannel(ch);
         }
-        startForeground(NOTE_ID, buildNotification());
+        // If the OS refuses foreground promotion, bail gracefully rather than
+        // crash-looping the whole app on every launch that kicks the engine —
+        // the mint resumes on the next successful start.
+        if (!startForegroundCompat()) { stopSelf(); return; }
         node = new NodeApi(this, enabled -> { if (enabled) handler.post(tick); });
         handler.postDelayed(tick, 4000);
+    }
+
+    private boolean startForegroundCompat() {
+        Notification n = buildNotification();
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                // specialUse, not dataSync: Android 14 caps dataSync at ~6h/day
+                // and then CRASHES the service. A mint legitimately runs long.
+                startForeground(NOTE_ID, n,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTE_ID, n,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                startForeground(NOTE_ID, n);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;   // ForegroundServiceStartNotAllowedException etc. — never crash
+        }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
