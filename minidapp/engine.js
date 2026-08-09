@@ -398,6 +398,35 @@ function enginePhaseCreate(row, tip, done) {
   }, function (e) { engineSetError(row, e, done); });
 }
 
+/* ---- the joint-budget gate, at the ENGINE — the last line of defense ----
+ * The token signature (signtype/signedby/signature, ~8.4KB) lands in the
+ * record AFTER tokencreate, invisible to every client-side estimate: 'Math'
+ * passed each UI guard at ~10K visible definition, then signing pushed the
+ * real record to 18.4K — past the split bound, sealed forever. The engine
+ * now measures the TRUE weights before posting anything: sign when it fits,
+ * DROP the signature when that alone saves transferability (the locked
+ * script already proves the creator via SIGNEDBY — the token signature is
+ * redundant provenance), and refuse honestly when even unsigned cannot
+ * travel. No UI path can reach tokencreate around this. */
+var ENGINE_DEF_WRAPPER = 533;     // fullDef - len(metaJSON), constant on-chain
+var ENGINE_DEF_SIGN = 8400;       // measured signtype+signedby+signature weight
+var ENGINE_DEF_SPLIT_MAX = 17300; // 3 records + sig under the 64KB split txn
+var ENGINE_PAIR_BUDGET = 23000;   // record + largest image, proven transfer point
+
+function engineJointGate(metaLen, maxImg) {
+  var unsigned = metaLen + ENGINE_DEF_WRAPPER;
+  var signed = unsigned + ENGINE_DEF_SIGN;
+  if (signed <= ENGINE_DEF_SPLIT_MAX && signed + maxImg <= ENGINE_PAIR_BUDGET) {
+    return { sign: true, error: null };
+  }
+  if (unsigned <= ENGINE_DEF_SPLIT_MAX && unsigned + maxImg <= ENGINE_PAIR_BUDGET) {
+    return { sign: false, error: null };
+  }
+  return { sign: false, error: "definition " + unsigned + "B + largest image " +
+    maxImg + "B breaks the transfer budget (" + ENGINE_PAIR_BUDGET +
+    "B) - hosted icon, lighter traits or fewer items" };
+}
+
 function enginePhaseCreatePost(row, tip, done) {
   (function () {
     if (row.POSTED == 1) {
@@ -430,16 +459,30 @@ function enginePhaseCreatePost(row, tip, done) {
     if (row.ITEMTRAITS) {
       try { meta.traits = JSON.parse(row.ITEMTRAITS); } catch (e) {}
     }
-    var cmd = "tokencreate name:" + JSON.stringify(meta) +
-              " amount:" + row.SIZE + " decimals:0" +
-              " script:\"" + engineScript(row.CREATORPK, row.MODE) + "\"" +
-              " state:{\"0\":\"0\"}" +
-              " signtoken:" + row.CREATORPK;
-    if (row.WEBVALIDATE) { cmd += " webvalidate:" + row.WEBVALIDATE; }
-    engineCmd(cmd, function () {
-      MDS.sql("UPDATE collections SET posted=1, postedat=" + tip +
-              " WHERE id=" + row.ID, done);
-    }, function (e) { engineSetError(row, e, done); });
+    var metaStr = JSON.stringify(meta);
+    MDS.sql("SELECT MAX(LENGTH(image)) AS MX FROM items WHERE collectionid=" +
+            row.ID, function (res) {
+      var maxImg = 0;
+      if (res.rows && res.rows.length) {
+        maxImg = parseInt(res.rows[0].MX, 10) || 0;
+      }
+      var gate = engineJointGate(metaStr.length, maxImg);
+      if (gate.error) { engineSetError(row, gate.error, done); return; }
+      var cmd = "tokencreate name:" + metaStr +
+                " amount:" + row.SIZE + " decimals:0" +
+                " script:\"" + engineScript(row.CREATORPK, row.MODE) + "\"" +
+                " state:{\"0\":\"0\"}";
+      if (gate.sign) { cmd += " signtoken:" + row.CREATORPK; }
+      else {
+        MDS.log("collection " + row.ID + ": token signature dropped to keep " +
+                "the lots transferable - the locked script still proves the creator");
+      }
+      if (row.WEBVALIDATE) { cmd += " webvalidate:" + row.WEBVALIDATE; }
+      engineCmd(cmd, function () {
+        MDS.sql("UPDATE collections SET posted=1, postedat=" + tip +
+                " WHERE id=" + row.ID, done);
+      }, function (e) { engineSetError(row, e, done); });
+    });
   })();
 }
 

@@ -3416,7 +3416,9 @@ function photoCompose(seed, salt, key, chosen, P) {
     G = opts[i][0];
     body = pixel ? photoDrawGrid(model, G, chosen.mode, chosen.outline, P)
                  : photoTrace(model, G, opts[i][1], chosen.mode, chosen.outline, P);
-    if (body.length <= 11200) { break; }
+    /* 8200 raw = ~10.9K b64 per plate: with an unsigned ~12K record that
+     * clears the 23000 joint transfer budget (record + image) with margin */
+    if (body.length <= 8200) { break; }
   }
   return s + "<g transform='translate(40 40) scale(" + N(432 / G) + ")'" +
     (pixel ? " shape-rendering='crispEdges'" : "") + ">" + body +

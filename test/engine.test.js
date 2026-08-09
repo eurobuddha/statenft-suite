@@ -137,6 +137,25 @@ check("injection payload neutralised", engineSqlEsc("x'; DROP TABLE items--"),
 check("graveyard is the RETURN FALSE address",
   GRAVEYARD, "0xABA005476D2B3CD7F251B9783E64C124C9670BB358695F04D91B2057BB64CB49");
 
+/* ---- the joint-budget gate: the signature is COUNTED ------------------- */
+/* 'Math' (4.1.8, guarded): client meta ~9.6K passed every UI check, then
+ * signtoken added ~8.4KB server-side -> real record 18.4K, past the split
+ * bound, sealed forever. The engine gate must reproduce that story. */
+const { engineJointGate } = sandbox;
+console.log("engineJointGate — signature-aware, engine-level");
+const light = engineJointGate(3000, 5500);        // small generative collection
+check("light collection signs", light.sign, true);
+check("light collection passes", light.error, null);
+const math = engineJointGate(9554, 5500);         // the 'Math' fixture: meta 9554
+check("Math-weight record cannot sign", math.sign, false);
+check("Math-weight record still mints unsigned", math.error, null);
+const photo = engineJointGate(11500, 10900);      // photo pack at max budgets
+check("max photo collection mints unsigned", photo.error, null);
+const doomed = engineJointGate(11500, 14000);     // pre-fix Painted weights
+check("over-joint collection refused", typeof doomed.error === "string", true);
+const fat = engineJointGate(18000, 0);            // record alone past split max
+check("unsplittable record refused outright", typeof fat.error === "string", true);
+
 console.log(failures === 0
   ? "\nengine.test.js: all assertions passed"
   : `\nengine.test.js: ${failures} FAILED`);

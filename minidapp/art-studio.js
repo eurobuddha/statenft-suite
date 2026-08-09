@@ -136,10 +136,10 @@ function artAiCartoonize(cv512, cb) {
 }
 
 /* jpeg b64 of the painted canvas within the paint budget — largest rung
- * that fits wins. 10800 b64 chars of paint leaves the whole Painted plate
- * (bg + image element + overlay, then base64'd for coin state) under the
- * 16000 budget with margin. */
-var ART_PAINT_BUDGET = 10800;
+ * that fits wins. 7600 b64 chars of paint keeps the whole Painted plate
+ * (~10.9K b64 in coin state) inside the 23000 joint transfer budget beside
+ * an unsigned ~12K record — the 'Math' lesson, enforced by the engine. */
+var ART_PAINT_BUDGET = 7600;
 function artPaintB64(cv) {
   var dims = [384, 320, 256, 208];
   var quals = [0.82, 0.72, 0.62, 0.5];
@@ -826,7 +826,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.9", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.10", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

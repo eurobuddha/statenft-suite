@@ -139,12 +139,23 @@ public final class MintEngine {
         JSONObject tokenMeta = StateNft.tokenMetadata(m);
         JSONObject itemTraits = row.optJSONObject("itemtraits");
         if (itemTraits != null && itemTraits.length() > 0) put(tokenMeta, "traits", itemTraits);
+        int maxImg = maxImageLen(row);
+        String gate = jointGate(tokenMeta.toString().length(), maxImg);
+        if (!"sign".equals(gate) && !"nosign".equals(gate)) {
+            setError(ctx, row, gate, done);
+            return;
+        }
         String cmd = "tokencreate name:" + tokenMeta
                 + " amount:" + row.optInt("size")
                 + " decimals:0"
                 + " script:\"" + StateNft.script(row.optString("creatorpk"), row.optString("mode")) + "\""
-                + " state:{\"0\":\"0\"}"
-                + " signtoken:" + row.optString("creatorpk");
+                + " state:{\"0\":\"0\"}";
+        if ("sign".equals(gate)) {
+            cmd += " signtoken:" + row.optString("creatorpk");
+        } else {
+            LocalStore.logEvent(ctx, "Token signature dropped to keep the lots transferable"
+                    + " - the locked script still proves the creator");
+        }
         if (!row.optString("webvalidate").isEmpty()) cmd += " webvalidate:" + row.optString("webvalidate");
         cmd(node, cmd, new Cb() {
             @Override public void ok(JSONObject res) {
@@ -274,6 +285,26 @@ public final class MintEngine {
     static final int TRANSFER_PAIR_BUDGET = 23000;
     static final int DEF_WRAPPER = 533;
     static final int DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
+    /** signtype+signedby+signature JSON weight — lands in the record AFTER
+     *  tokencreate, invisible to every client-side estimate. 'Math' passed
+     *  the guards at ~10K visible definition; signing pushed the real record
+     *  to 18.4K — past the split bound. Counted here forever after. */
+    static final int DEF_SIGN_WEIGHT = 8400;
+
+    /** The engine-level gate: sign when the TRUE (signed) weights fit, drop
+     *  the redundant token signature when that alone saves transferability
+     *  (the locked script already proves the creator via SIGNEDBY), refuse
+     *  honestly when even unsigned cannot travel. Returns "sign", "nosign",
+     *  or an error message. */
+    static String jointGate(int metaLen, int maxImg) {
+        int unsigned = metaLen + DEF_WRAPPER;
+        int signed = unsigned + DEF_SIGN_WEIGHT;
+        if (signed <= DEF_SPLIT_MAX && signed + maxImg <= TRANSFER_PAIR_BUDGET) return "sign";
+        if (unsigned <= DEF_SPLIT_MAX && unsigned + maxImg <= TRANSFER_PAIR_BUDGET) return "nosign";
+        return "definition " + unsigned + "B + largest image " + maxImg
+             + "B breaks the transfer budget (" + TRANSFER_PAIR_BUDGET
+             + "B) - hosted icon, lighter traits or fewer items";
+    }
 
     /** Exact definition length the engine would seal for this Meta + traits. */
     static int defActualLen(StateNft.Meta m, JSONObject itemTraits) {
@@ -776,6 +807,16 @@ public final class MintEngine {
     private static int firstFree(int size, HashSet<String> used) {
         for (int i = 1; i <= size; i++) if (!used.contains(String.valueOf(i))) return i;
         return size;
+    }
+
+    /** Largest embedded image (b64 chars) across the row's items. */
+    private static int maxImageLen(JSONObject row) {
+        int size = row.optInt("size", 0);
+        int max = 0;
+        for (int idx = 1; idx <= size; idx++) {
+            max = Math.max(max, itemImage(row, idx).length());
+        }
+        return max;
     }
 
     private static int missingLocalImages(JSONObject row) {

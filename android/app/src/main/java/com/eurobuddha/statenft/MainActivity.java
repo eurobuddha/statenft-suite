@@ -3169,7 +3169,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 final String rgba = px == null ? null : artRgbaJson(px);
                 /* AI paintings are flat — richer 10-color trace, and the
                  * painting itself rides along for the Painted finish */
-                final String paint = ai ? ImageTools.paintB64(toon, 10800) : "";
+                final String paint = ai ? ImageTools.paintB64(toon, 7600) : "";
                 runOnUiThread(() -> {
                     if (rgba == null) { toast("Could not read that photo"); return; }
                     ArtStudio.with(this, s -> s.setPhoto(rgba, ai ? 10 : 8, paint, k -> {

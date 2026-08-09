@@ -62,6 +62,16 @@ stripped or forged.
 > plates stay flat-traced (now 10 colors from AI-flat sources). Stale
 > drafts migrate; both clients run the identical model.
 
+> **v4.1.10 — the signature was the leak.** Every collection was creator-
+> signed at tokencreate, and the ~8.4KB WOTS signature lands in the token
+> record AFTER the client-side budget math — 'Math' passed every guard at
+> ~10K visible definition and sealed at 18.4K, past the split bound. The
+> joint-budget gate now lives IN BOTH ENGINES (the last line before
+> tokencreate), counts the signature, drops it when that alone keeps the
+> lots transferable (the locked script's SIGNEDBY still proves the
+> creator), and refuses honestly otherwise. Photo plates tightened
+> (~10.9K b64 max) so standard collections clear the joint budget.
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed
