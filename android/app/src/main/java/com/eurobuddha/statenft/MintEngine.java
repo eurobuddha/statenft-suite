@@ -259,16 +259,41 @@ public final class MintEngine {
         }, e -> setError(ctx, row, e, done));
     }
 
-    /** Estimated on-chain token-definition weight at mint time: icon + traits
-     *  + name/desc + ~900B for the script and JSON scaffolding. Definitions
-     *  over ~12KB cannot split reliably under the 64KB TxPoW cap even at
-     *  unit+change — such a mint must be refused BEFORE tokencreate, because
-     *  the definition is immutable afterwards ("Math" taught us this). */
-    static final int DEF_BUDGET = 10500;
-    static int estimatedDefLen(String iconB64, String traitsJson, String nameDesc) {
-        return (iconB64 == null ? 0 : iconB64.length())
-             + (traitsJson == null ? 0 : traitsJson.length())
-             + (nameDesc == null ? 0 : nameDesc.length()) + 900;
+    /* ---- the JOINT transfer budget (the "Random" lesson, 2026-08-09) ----
+     * A sealed transfer carries the token definition TWICE (input proof +
+     * output) and the embedded image TWICE (input state + replayed output
+     * state), plus a multi-KB signature — all under the 64KB TxPoW cap:
+     *
+     *     defActual + maxImageB64  <=  23000    (proven on-chain: 7K def +
+     *                                            16000 image, spike 2026-08-05)
+     *
+     * "Random" (def 14,587 + images 12-15K) computes to 65-71KB transfers —
+     * sealed forever, transferable never. The definition is computed EXACTLY:
+     * the metadata JSON the engine seals plus the measured 533-byte record
+     * wrapper (constant across every minted collection on this chain). */
+    static final int TRANSFER_PAIR_BUDGET = 23000;
+    static final int DEF_WRAPPER = 533;
+    static final int DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
+
+    /** Exact definition length the engine would seal for this Meta + traits. */
+    static int defActualLen(StateNft.Meta m, JSONObject itemTraits) {
+        JSONObject meta = StateNft.tokenMetadata(m);
+        if (itemTraits != null && itemTraits.length() > 0) put(meta, "traits", itemTraits);
+        return meta.toString().length() + DEF_WRAPPER;
+    }
+
+    /** null = fits both bounds; else a refusal naming the real numbers. */
+    static String jointBudgetError(int defActual, int maxImg) {
+        if (defActual > DEF_SPLIT_MAX) {
+            return "token record " + defActual + "B cannot split under the 64KB cap (max "
+                 + DEF_SPLIT_MAX + "B) — hosted icon or fewer traits";
+        }
+        if (defActual + maxImg > TRANSFER_PAIR_BUDGET) {
+            return "record " + defActual + "B + largest image " + maxImg + "B exceeds the "
+                 + TRANSFER_PAIR_BUDGET + "B transfer budget — the lots would seal but never "
+                 + "send. Hosted icon, fewer traits, or smaller items";
+        }
+        return null;
     }
 
     /** Unit outputs per split txn such that (k units + change + input) token

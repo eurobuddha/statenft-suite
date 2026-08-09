@@ -1526,6 +1526,16 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     put(it, "image", "embed".equals(createMode) ? createImages[i - 1] : (bsF + i + extValue));
                     items.put(it);
                 }
+                /* Final exact gate: name/desc/icon/traits are all known here.
+                 * Refuse to create a collection whose lots could never leave
+                 * the wallet (joint transfer budget - the "Random" lesson). */
+                if ("embed".equals(createMode)) {
+                    int maxImg = 0;
+                    for (String im : createImages) if (im != null && im.length() > maxImg) maxImg = im.length();
+                    int defA = MintEngine.defActualLen(m, collectionItemTraits);
+                    String jointErr = MintEngine.jointBudgetError(defA, maxImg);
+                    if (jointErr != null) { toast(jointErr); return; }
+                }
                 JSONObject row = MintEngine.rowFromMeta(m, items);
                 if (collectionItemTraits != null && collectionItemTraits.length() > 0
                         && "embed".equals(createMode)) {
@@ -2321,30 +2331,38 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         : ArtStudio.svgBitmap(lead.optString("svg"), 512);
                 iconB64 = ImageTools.iconFromBitmap(b, ImageTools.ICON_BUDGET);
             }
-            /* Definition-weight guard: icon + traits become the token's
-             * IMMUTABLE on-chain definition, and past ~12KB it can no longer
-             * split under the 64KB TxPoW cap. Shrink the icon before minting;
-             * refuse outright rather than mint an unsplittable collection. */
+            /* JOINT budget guard (exact, not estimated): the token record and
+             * the LARGEST embedded image travel together, twice, in every
+             * transfer — over ~23KB combined the lots seal but can never leave
+             * the wallet (the "Random" lesson). Slim the icon; refuse rather
+             * than mint untransferable lots. */
             if (err.isEmpty()) {
-                String traitsJson = traitsMap.toString();
-                String iconInPlay = !iconB64.isEmpty() ? iconB64
-                        : (images.length > 0 ? images[0] : "");
-                int est = MintEngine.estimatedDefLen(iconInPlay, traitsJson, "");
-                if (est > MintEngine.DEF_BUDGET) {
+                int maxImg = 0;
+                for (String im : images) if (im != null && im.length() > maxImg) maxImg = im.length();
+                StateNft.Meta probe = new StateNft.Meta();
+                probe.name = "collection-name-placeholder-40chars....";
+                probe.description = "";
+                probe.mode = "embed";
+                probe.size = images.length;
+                probe.icon = !iconB64.isEmpty() ? iconB64
+                        : (images.length > 0 && images[0].length() <= ImageTools.ICON_BUDGET
+                            ? images[0] : "");
+                int defA = MintEngine.defActualLen(probe, traitsMap);
+                String jointErr = MintEngine.jointBudgetError(defA, maxImg);
+                if (jointErr != null) {
                     JSONObject lead = itemsF.optJSONObject(0);
                     android.graphics.Bitmap b = lead == null ? null
                             : ArtStudio.svgBitmap(lead.optString("svg"), 512);
                     String slim = ImageTools.iconFromBitmap(b, 4000);
+                    probe.icon = slim;
                     if (!slim.isEmpty()
-                            && MintEngine.estimatedDefLen(slim, traitsJson, "") <= MintEngine.DEF_BUDGET) {
+                            && MintEngine.jointBudgetError(MintEngine.defActualLen(probe, traitsMap), maxImg) == null) {
                         iconB64 = slim;
                         LocalStore.logEvent(MainActivity.this,
-                                "Icon slimmed to keep the token definition splittable ("
-                                + est + "B est → icon " + slim.length() + "B)");
+                                "Icon slimmed to keep every lot transferable (record was "
+                                + defA + "B beside a " + maxImg + "B image)");
                     } else {
-                        err = "Traits + icon would make an unsplittable token ("
-                                + est + "B > " + MintEngine.DEF_BUDGET
-                                + "B) — use a hosted icon URL or fewer items";
+                        err = jointErr;
                     }
                 }
             }

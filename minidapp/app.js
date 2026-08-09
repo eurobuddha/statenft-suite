@@ -1252,6 +1252,18 @@ function mintCollection() {
     });
   }
   withIcon(function () {
+  /* JOINT transfer budget (see art-studio.js): the token record and the
+   * largest embedded image travel TOGETHER, twice, in every transfer — over
+   * ~23KB combined the lots seal but can never leave the wallet ("Random"). */
+  if (mode === "embed") {
+    var maxImg = 0;
+    for (var mi = 0; mi < size; mi++) {
+      if (WIZ_IMAGES[mi] && WIZ_IMAGES[mi].length > maxImg) { maxImg = WIZ_IMAGES[mi].length; }
+    }
+    var defA = artDefActual(name, desc, size, icon, externalurl, null);
+    var jointErr = artJointBudgetError(defA, maxImg);
+    if (jointErr) { status.innerText = jointErr; return; }
+  }
   MDS.cmd("getaddress", function (res) {
     if (!res.status) { status.innerText = "getaddress failed"; return; }
     var addr = res.response.address;
@@ -1351,6 +1363,25 @@ function doTransfer() {
     return "txnstate id:" + id + " port:" + s.port + " value:" + s.data;
   });
 
+  /* Honest pre-check: definition + state ride TWICE per transfer (+~12K sig)
+   * under the 64KB cap. Collections minted before the joint guard can carry
+   * loads that can NEVER transfer — say so instead of posting a doomed txn. */
+  var stateLen = 0;
+  for (var sl = 0; sl < st.length; sl++) { stateLen += ("" + st[sl].data).length; }
+  var stF = stateLen;
+  MDS.cmd("tokens tokenid:" + TOKENID, function (tres) {
+    var defLen = (tres.status && tres.response) ? JSON.stringify(tres.response).length : 0;
+    if (defLen > 0 && 2 * (defLen + stF) + 12000 > 64000) {
+      status.innerText = "this lot cannot fit a transfer under the chain's 64KB " +
+        "cap (record " + defLen + "B + state " + stF + "B, both carried twice) — " +
+        "it was minted before the transfer-budget guard. Burial is the only exit.";
+      return;
+    }
+    doTransferGo(to, c, idx, id, states, status, fail);
+  });
+}
+
+function doTransferGo(to, c, idx, id, states, status, fail) {
   status.innerText = "building transaction...";
   step("txncreate id:" + id, function () {
     step("txninput id:" + id + " coinid:" + c.coinid, function () {

@@ -500,12 +500,57 @@ function svgToIconB64(svg, cb, budget) {
   } catch (e) { cb(""); }
 }
 
-/* the icon + traits become the token's IMMUTABLE on-chain definition; past
- * ~12KB it can no longer split under the 64KB TxPoW cap ("Math" taught us) */
-var ART_DEF_BUDGET = 10500;
-function artEstimatedDefLen(iconB64, traitsJson, nameDesc) {
-  return (iconB64 || "").length + (traitsJson || "").length +
-         (nameDesc || "").length + 900;
+/* ---- the JOINT transfer budget (the "Random" lesson, 2026-08-09) ----
+ *
+ * A sealed transfer carries the token definition TWICE (input proof + output)
+ * and the embedded image TWICE (input state + replayed output state), plus a
+ * multi-KB signature — all under the 64KB TxPoW cap. So the definition and
+ * the LARGEST item image are one budget, not two:
+ *
+ *     defActual + maxImageB64  <=  23000     (proven on-chain: 7K definition
+ *                                             + 16000 image, spike 2026-08-05)
+ *
+ * "Random" (def 14,587 + images 12-15K, minted before this guard) computes to
+ * 65-71KB transfers — sealed forever, transferable never. The definition is
+ * computed EXACTLY here: the same metadata JSON the engine will seal, plus the
+ * measured 533-byte record wrapper (constant across every minted collection).
+ * The split bound (3 defs + sig at unit+change) is kept alongside. */
+var ART_TRANSFER_PAIR_BUDGET = 23000;
+var ART_DEF_WRAPPER = 533;
+var ART_DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
+
+/* mirror enginePhaseCreatePost field-for-field so the length is exact */
+function artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap) {
+  var meta = { name: name, description: desc || "", mode: "embed", size: size };
+  if (iconValue) {
+    meta.url = iconValue.indexOf("http") === 0 ? iconValue : "<artimage>" + iconValue;
+  }
+  if (externalUrl) { meta.external_url = externalUrl; }
+  if (traitsMap) {
+    var any = false;
+    for (var k in traitsMap) { if (traitsMap.hasOwnProperty(k)) { any = true; break; } }
+    if (any) { meta.traits = traitsMap; }
+  }
+  return meta;
+}
+
+function artDefActual(name, desc, size, iconValue, externalUrl, traitsMap) {
+  return JSON.stringify(artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap)).length
+       + ART_DEF_WRAPPER;
+}
+
+/* null = fits; else a human-readable refusal naming the real numbers */
+function artJointBudgetError(defActual, maxImg) {
+  if (defActual > ART_DEF_SPLIT_MAX) {
+    return "token record " + defActual + "B cannot split under the 64KB cap (max "
+         + ART_DEF_SPLIT_MAX + "B) — hosted icon or fewer traits";
+  }
+  if (defActual + maxImg > ART_TRANSFER_PAIR_BUDGET) {
+    return "record " + defActual + "B + largest image " + maxImg + "B exceeds the "
+         + ART_TRANSFER_PAIR_BUDGET + "B transfer budget — the lots would seal "
+         + "but never send. Hosted icon, fewer traits, or smaller items";
+  }
+  return null;
 }
 
 $("g-mint-btn").onclick = function () {
@@ -581,27 +626,34 @@ $("g-mint-btn").onclick = function () {
     });
   }
 
+  var maxImg = 0;
+  for (var mi = 0; mi < col.items.length; mi++) {
+    var ib = b64bytes(col.items[mi].bytes);
+    if (ib > maxImg) { maxImg = ib; }
+  }
+
   withGenIcon(function (iconRaw) {
-    /* definition-weight guard: refuse (or slim the icon) rather than mint a
-     * token whose immutable definition can never split on-chain */
-    var traitsJson = JSON.stringify(traitsMap);
-    var est = artEstimatedDefLen(iconRaw, traitsJson, name + desc);
-    if (est > ART_DEF_BUDGET && !iconUrl && col.items.length) {
+    /* JOINT budget guard: the definition (exact, not estimated) and the
+     * largest image must fit one transfer together — refuse or slim the icon
+     * rather than seal lots that can never leave the wallet */
+    var defA = artDefActual(name, desc, size, iconRaw, externalUrl, traitsMap);
+    var errA = artJointBudgetError(defA, maxImg);
+    if (errA && !iconUrl && col.items.length) {
       svgToIconB64(col.items[iconItem - 1].svg, function (slim) {
-        var est2 = artEstimatedDefLen(slim ? slim + "</artimage>" : "", traitsJson, name + desc);
-        if (slim && est2 <= ART_DEF_BUDGET) {
-          artMintGo(slim + "</artimage>");
+        var slimIcon = slim ? slim + "</artimage>" : "";
+        var defB = artDefActual(name, desc, size, slimIcon, externalUrl, traitsMap);
+        if (slim && artJointBudgetError(defB, maxImg) === null) {
+          toast("icon slimmed to keep every lot transferable");
+          artMintGo(slimIcon);
         } else {
-          artSetStatus("g-status", "traits + icon would make an unsplittable token (" +
-            est + "B > " + ART_DEF_BUDGET + "B) — use a hosted icon URL or fewer items", "err");
+          artSetStatus("g-status", errA, "err");
           $("g-mint-btn").disabled = false;
         }
       }, 3500);
       return;
     }
-    if (est > ART_DEF_BUDGET) {
-      artSetStatus("g-status", "traits + icon would make an unsplittable token (" +
-        est + "B > " + ART_DEF_BUDGET + "B) — use a hosted icon URL or fewer items", "err");
+    if (errA) {
+      artSetStatus("g-status", errA, "err");
       $("g-mint-btn").disabled = false;
       return;
     }
@@ -750,7 +802,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.7", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.8", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

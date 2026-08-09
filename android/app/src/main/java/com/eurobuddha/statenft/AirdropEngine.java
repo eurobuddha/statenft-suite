@@ -112,6 +112,21 @@ public final class AirdropEngine {
         if (j == null) { registerJob(ctx, localId, false); next.run(); return; }
         JSONArray es = j.optJSONArray("entries");
         if (es == null) { clearJob(ctx, localId); next.run(); return; }
+        if (j.optInt("deflen", 0) <= 0 && !j.optString("tokenid").isEmpty()) {
+            // fetch the record weight once per job — the send-time cap check needs it
+            node.cmd("tokens tokenid:" + j.optString("tokenid"), new NodeApi.Cb() {
+                @Override public void onResult(JSONObject json) {
+                    Object r = json.opt("response");
+                    put(j, "deflen", r == null ? 0 : r.toString().length());
+                    saveJob(ctx, j);
+                    stepEntry(ctx, node, j, es, 0, tip, localId, new boolean[]{false}, done, next);
+                }
+                @Override public void onError(String message) {
+                    stepEntry(ctx, node, j, es, 0, tip, localId, new boolean[]{false}, done, next);
+                }
+            });
+            return;
+        }
         stepEntry(ctx, node, j, es, 0, tip, localId, new boolean[]{false}, done, next);
     }
 
@@ -163,6 +178,27 @@ public final class AirdropEngine {
                 if (coin == null || !StateNft.replayableState(coin)) {
                     put(e, "status", "FAIL");
                     put(e, "error", "malformed coin state");
+                    advance.run();
+                    return;
+                }
+                /* Honest pre-check: record + state ride TWICE per transfer
+                 * (+~12K sig) under the 64KB cap. Pre-guard collections can
+                 * carry loads that can NEVER transfer — FAIL the entry with
+                 * the truth instead of posting doomed txns every 6 blocks. */
+                int stateLen = 0;
+                org.json.JSONArray stArr = coin.optJSONArray("state");
+                if (stArr != null) for (int sj = 0; sj < stArr.length(); sj++) {
+                    JSONObject sv = stArr.optJSONObject(sj);
+                    if (sv != null) stateLen += sv.optString("data").length();
+                }
+                int defLen = j.optInt("deflen", 0);
+                if (defLen > 0 && 2 * (defLen + stateLen) + 12000 > 64000) {
+                    put(e, "status", "FAIL");
+                    put(e, "error", "cannot fit a transfer under the 64KB cap (record "
+                            + defLen + "B + state " + stateLen + "B, both carried twice) — "
+                            + "minted before the transfer-budget guard; burial is the only exit");
+                    LocalStore.logEvent(ctx, "Airdrop lot " + e.optInt("idx")
+                            + ": untransferable under the 64KB cap — skipped honestly");
                     advance.run();
                     return;
                 }

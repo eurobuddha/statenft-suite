@@ -10,16 +10,23 @@ import static org.junit.Assert.*;
 
 public class StampPlannerTest {
 
-    /* (k units + change + input) full token definitions must fit ~40KB under
-     * the 64KB TxPoW cap — a fixed 3-unit batch silently stalled generative
-     * mints whose ~11KB definitions built txns the chain rejected quietly. */
-    @Test public void definitionEstimatorGuardsUnsplittableMints() {
-        // ~6KB icon + ~5KB traits (the "Math" shape) must trip the guard path
-        String icon = "A".repeat(6000);
-        String traits = "B".repeat(5000);
-        assertTrue(MintEngine.estimatedDefLen(icon, traits, "Math") > MintEngine.DEF_BUDGET);
-        // a slimmed 4KB icon brings the same traits back under budget
-        assertTrue(MintEngine.estimatedDefLen("A".repeat(4000), traits, "Math") <= MintEngine.DEF_BUDGET);
+    /* JOINT transfer budget: the record and the largest image ride TWICE per
+     * transfer (+sig) under 64KB — defActual + maxImg <= 23000 (proven point:
+     * 7K def + 16000 image, spike 2026-08-05). "Random" (def 14587 + images up
+     * to 14850) must REFUSE; the proven spike shape must PASS. */
+    @Test public void jointBudgetRefusesRandomShapePassesSpikeShape() {
+        assertNotNull(MintEngine.jointBudgetError(14587, 14850));   // Random: 65-71KB txns, sealed forever
+        assertNull(MintEngine.jointBudgetError(7000, 16000));       // the proven on-chain spike, exactly 23000
+        assertNotNull(MintEngine.jointBudgetError(7001, 16000));    // one byte past the proven point
+        assertNotNull(MintEngine.jointBudgetError(18000, 0));       // split bound alone (Math's record)
+        assertNull(MintEngine.jointBudgetError(9000, 8192));        // classic generative shape
+    }
+
+    @Test public void defActualLenIsExactMetadataPlusWrapper() {
+        StateNft.Meta m = new StateNft.Meta();
+        m.name = "T"; m.description = ""; m.mode = "embed"; m.size = 2; m.icon = "";
+        assertEquals(StateNft.tokenMetadata(m).toString().length() + MintEngine.DEF_WRAPPER,
+                MintEngine.defActualLen(m, null));
     }
 
     @Test public void splitBatchSizesToTokenDefinition() {

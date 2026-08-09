@@ -88,33 +88,59 @@ function sendTick(cb) {
             sendSetStatus(row.ID, "DONE", "", next);
             return;
           }
-          engineEach(sealed, function (c, cnext) {
-            if (!enginePendingOk(c.coinid, tip)) { cnext(); return; }
-            var steps = sendPlanSteps(c, row.RECIPIENT, row.TOKENID,
-                                      "sd" + row.ID);
-            if (!steps) {
-              sendSetStatus(row.ID, "ERROR",
-                "refusing to transfer coin " + c.coinid.substring(0, 18) +
-                "… — malformed state", cnext);
-              return;
+          /* Pre-guard collections carry loads that can NEVER transfer: the
+           * record + state ride twice per txn (+~12K sig) under the 64KB cap.
+           * Error the queue honestly instead of posting doomed txns forever. */
+          MDS.cmd("tokens tokenid:" + row.TOKENID, function (tchk) {
+            var defLen = (tchk.status && tchk.response)
+              ? JSON.stringify(tchk.response).length : 0;
+            if (defLen > 0) {
+              var doomed = 0;
+              for (var di = 0; di < sealed.length; di++) {
+                var stl = 0;
+                var stt = sealed[di].state || [];
+                for (var dj = 0; dj < stt.length; dj++) { stl += ("" + stt[dj].data).length; }
+                if (2 * (defLen + stl) + 12000 > 64000) { doomed++; }
+              }
+              if (doomed === sealed.length) {
+                sendSetStatus(row.ID, "ERROR", "these lots cannot fit a transfer " +
+                  "under the chain's 64KB cap (record " + defLen + "B carried twice " +
+                  "per txn) - minted before the transfer-budget guard; burial is " +
+                  "the only exit", next);
+                return;
+              }
             }
-            engineMarkPending(c.coinid, tip);
-            enginePostTxn("sd" + row.ID, steps, cnext, function (e) {
-              /* a failed post is only an error if the coin still exists — a
-               * user's manual transfer racing this queue spends it first, and
-               * that must not halt dispatch of the remaining lots */
-              MDS.cmd("coins coinid:" + c.coinid, function (chk) {
-                var arr = chk.status ? chk.response : null;
-                var present = arr && arr.length > 0;
-                if (!present) { cnext(); return; }   // departed by other means
-                sendSetStatus(row.ID, "ERROR", e, cnext);
-              });
-            });
-          }, next);
+            sendRowCoins(row, sealed, tip, next);
+          });
         }, function () { next(); });
       }, function () { if (cb) { cb(); } });
     });
   });
+}
+
+function sendRowCoins(row, sealed, tip, next) {
+  engineEach(sealed, function (c, cnext) {
+    if (!enginePendingOk(c.coinid, tip)) { cnext(); return; }
+    var steps = sendPlanSteps(c, row.RECIPIENT, row.TOKENID, "sd" + row.ID);
+    if (!steps) {
+      sendSetStatus(row.ID, "ERROR",
+        "refusing to transfer coin " + c.coinid.substring(0, 18) +
+        "… — malformed state", cnext);
+      return;
+    }
+    engineMarkPending(c.coinid, tip);
+    enginePostTxn("sd" + row.ID, steps, cnext, function (e) {
+      /* a failed post is only an error if the coin still exists — a
+       * user's manual transfer racing this queue spends it first, and
+       * that must not halt dispatch of the remaining lots */
+      MDS.cmd("coins coinid:" + c.coinid, function (chk) {
+        var arr = chk.status ? chk.response : null;
+        var present = arr && arr.length > 0;
+        if (!present) { cnext(); return; }   // departed by other means
+        sendSetStatus(row.ID, "ERROR", e, cnext);
+      });
+    });
+  }, next);
 }
 
 /* node-side tests exercise the pure planners only */
