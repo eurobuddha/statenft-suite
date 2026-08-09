@@ -16,6 +16,10 @@ var svgBySeed = {};   // styleKey -> svg for cross-style comparison
 styles.forEach(function (sk) {
   console.log("--- " + sk + " ---");
   var cfg = art.artDefaultConfig(sk);
+  /* photo mints under the raised 16000 budget (IMG_BUDGET's on-chain proof);
+   * the generative packs stay swept at their tuned 8192 so the raise can
+   * never mask a pack regression */
+  var budget = sk === "photo" ? 16000 : 8192;
 
   /* determinism */
   var a = art.artGenerate("test-seed", "1", cfg);
@@ -46,13 +50,13 @@ styles.forEach(function (sk) {
     if (keys[it.key]) { dup = true; }
     keys[it.key] = true;
     if (it.bytes > maxBytes) { maxBytes = it.bytes; }
-    if (Math.ceil(it.bytes / 3) * 4 > 8192) { over++; }
+    if (Math.ceil(it.bytes / 3) * 4 > budget) { over++; }
   }
   ok(!dup, sk + ": all 48 combos unique");
-  ok(over === 0, sk + ": every item within 8KB base64 budget");
+  ok(over === 0, sk + ": every item within " + budget + "B base64 budget");
   var b64max = Math.ceil(maxBytes / 3) * 4;
   console.log("      " + sk + " largest: " + maxBytes + "B raw / " + b64max +
-              "B b64" + (maxBytes > 5800 ? "  (!) near budget" : ""));
+              "B b64" + (b64max > budget * 0.71 ? "  (!) near budget" : ""));
 
   /* forced-variant sweep: every variant must draw clean when solo-enabled */
   var bad = 0;
@@ -65,7 +69,7 @@ styles.forEach(function (sk) {
       var forced = art.artGenerate("force", "x" + s + "v" + v, solo);
       if (!forced || forced.svg.indexOf("NaN") !== -1 ||
           forced.svg.indexOf("undefined") !== -1 ||
-          Math.ceil(forced.svg.length / 3) * 4 > 8192) {
+          Math.ceil(forced.svg.length / 3) * 4 > budget) {
         bad++;
         console.log("FAIL  " + sk + " variant " + cfg.slots[s].key + "/" +
                     cfg.slots[s].variants[v].name);

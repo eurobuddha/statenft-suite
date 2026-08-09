@@ -110,8 +110,8 @@ console.log("art-studio — parse and top-level binding");
 check("art.js + art-studio.js load in the stub DOM", threw === null,
       threw && threw.stack && threw.stack.split("\n").slice(0, 2).join(" | "));
 
-check("18 style packs registered", threw === null &&
-      Object.keys(sandbox.ART_STYLES || {}).length === 18,
+check("19 style packs registered", threw === null &&
+      Object.keys(sandbox.ART_STYLES || {}).length === 19,
       "got " + Object.keys(sandbox.ART_STYLES || {}).length);
 
 /* exercise the render paths so every runtime id is requested too */

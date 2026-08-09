@@ -2911,6 +2911,285 @@ function pandasCompose(seed, salt, key, chosen, P) {
 }
 
 /* ======================================================================
+ * PACK: photo — a real photo as a pixel cartoon
+ *
+ * The page center-crops the picked photo onto a 48x48 canvas, quantizes it
+ * to 8 flat colors on-device (photo.js) and hands the master grid to
+ * artSetPhoto(). Every variant re-derives from that master: grid size,
+ * palette re-light, cartoon edge ink, overlays. With no photo loaded the
+ * pack draws a seeded placeholder bust — that is what the tests sweep and
+ * what the style card shows; the studio refuses to mint it.
+ * ====================================================================== */
+
+var ART_PHOTO_SRC = null;
+function artSetPhoto(model) { ART_PHOTO_SRC = model || null; }
+
+function photoSlots() {
+  return [
+    { key: "grid", label: "Grid", variants: [
+      { name: "48", weight: 46 }, { name: "40", weight: 30 },
+      { name: "32", weight: 24 } ] },
+    { key: "mode", label: "Mode", variants: [
+      { name: "Natural", weight: 34 }, { name: "Poster", weight: 22 },
+      { name: "Duotone", weight: 18 }, { name: "Mono", weight: 16 },
+      { name: "Invert", weight: 10 } ] },
+    { key: "background", label: "Background", variants: [
+      { name: "Plain", weight: 45 }, { name: "Wash", weight: 30 },
+      { name: "Grid", weight: 25 } ] },
+    { key: "outline", label: "Outline", variants: [
+      { name: "None", weight: 55 }, { name: "Ink", weight: 45 } ] },
+    { key: "overlay", label: "Overlay", variants: [
+      { name: "None", weight: 60 }, { name: "Scanlines", weight: 22 },
+      { name: "Dots", weight: 18 } ] }
+  ];
+}
+
+function photoHex2(v) {
+  v = Math.max(0, Math.min(255, I(v)));
+  var h = v.toString(16);
+  return h.length < 2 ? "0" + h : h;
+}
+function photoRgb(hex) {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16),
+          parseInt(hex.slice(5, 7), 16)];
+}
+function photoLum(hex) {
+  var c = photoRgb(hex);
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function photoLerpHex(a, b, t) {
+  var A = photoRgb(a), B = photoRgb(b);
+  return "#" + photoHex2(A[0] + (B[0] - A[0]) * t) +
+               photoHex2(A[1] + (B[1] - A[1]) * t) +
+               photoHex2(A[2] + (B[2] - A[2]) * t);
+}
+function photoRamp(stops, t) {
+  var pos = t * (stops.length - 1);
+  var i = Math.min(stops.length - 2, Math.floor(pos));
+  return photoLerpHex(stops[i], stops[i + 1], pos - i);
+}
+
+/* palette index -> luminance rank (0 = darkest); ties broken by index */
+function photoRanks(pal) {
+  var idx = [];
+  for (var i = 0; i < pal.length; i++) { idx.push(i); }
+  idx.sort(function (a, b) {
+    var d = photoLum(pal[a]) - photoLum(pal[b]);
+    return d !== 0 ? d : a - b;
+  });
+  var rank = [];
+  for (var r = 0; r < idx.length; r++) { rank[idx[r]] = r; }
+  return rank;
+}
+function photoDarkest(pal) {
+  var d = pal[0];
+  for (var i = 1; i < pal.length; i++) {
+    if (photoLum(pal[i]) < photoLum(d)) { d = pal[i]; }
+  }
+  return d;
+}
+
+/* majority-vote box downsample of quantized indices (also upsamples) */
+function photoResample(cells, srcN, dstN) {
+  if (dstN === srcN) { return cells.slice(); }
+  var out = [];
+  for (var y = 0; y < dstN; y++) {
+    var y0 = Math.floor(y * srcN / dstN), y1 = Math.floor((y + 1) * srcN / dstN);
+    if (y1 <= y0) { y1 = y0 + 1; }
+    for (var x = 0; x < dstN; x++) {
+      var x0 = Math.floor(x * srcN / dstN), x1 = Math.floor((x + 1) * srcN / dstN);
+      if (x1 <= x0) { x1 = x0 + 1; }
+      var counts = {}, best = cells[y0 * srcN + x0], bestN = 0;
+      for (var yy = y0; yy < y1; yy++) {
+        for (var xx = x0; xx < x1; xx++) {
+          var v = cells[yy * srcN + xx];
+          counts[v] = (counts[v] || 0) + 1;
+          if (counts[v] > bestN || (counts[v] === bestN && v < best)) {
+            best = v; bestN = counts[v];
+          }
+        }
+      }
+      out.push(best);
+    }
+  }
+  return out;
+}
+
+/* 3x3 majority filter — flattens sensor noise into flat cartoon regions
+ * (and cuts run counts, which is what the byte budget pays for) */
+function photoSmooth(cells, n) {
+  var out = cells.slice();
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      var counts = {}, best = -1, bestN = 0;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          var yy = y + dy, xx = x + dx;
+          if (yy < 0 || yy >= n || xx < 0 || xx >= n) { continue; }
+          var v = cells[yy * n + xx];
+          counts[v] = (counts[v] || 0) + 1;
+          if (counts[v] > bestN || (counts[v] === bestN && v < best)) {
+            best = v; bestN = counts[v];
+          }
+        }
+      }
+      if (bestN >= 5) { out[y * n + x] = best; }
+    }
+  }
+  return out;
+}
+
+/* display palette for a mode: photo colors, inverted, or the master's
+ * luminance order re-lit through the chosen palette's ramp */
+function photoPalette(model, mode, P) {
+  var pal = model.palette;
+  var k = pal.length;
+  var i;
+  if (mode === "Natural") { return pal.slice(); }
+  if (mode === "Invert") {
+    var inv = [];
+    for (i = 0; i < k; i++) {
+      var c = photoRgb(pal[i]);
+      inv.push("#" + photoHex2(255 - c[0]) + photoHex2(255 - c[1]) +
+               photoHex2(255 - c[2]));
+    }
+    return inv;
+  }
+  var stops = mode === "Mono" ? ["#0d0d12", "#f4f4f7"] :
+              mode === "Duotone" ? [P.ink, P.body, P.glow] :
+              [P.ink, P.body2, P.body, P.accent, P.glow];   /* Poster */
+  var rank = photoRanks(pal);
+  var out = [];
+  for (i = 0; i < k; i++) {
+    out.push(photoRamp(stops, k > 1 ? rank[i] / (k - 1) : 0));
+  }
+  return out;
+}
+
+/* cartoon edge: a cell whose right/down neighbour is >= 2 luminance ranks
+ * away sits on a region boundary (right/down only keeps the line thin) */
+function photoEdgeAt(cells, rank, G, x, y) {
+  var r = rank[cells[y * G + x]];
+  return (x + 1 < G && Math.abs(rank[cells[y * G + x + 1]] - r) >= 2) ||
+         (y + 1 < G && Math.abs(rank[cells[(y + 1) * G + x]] - r) >= 2);
+}
+
+function photoDrawGrid(model, G, mode, outline, P) {
+  var cells = photoSmooth(photoResample(model.cells, model.cols, G), G);
+  var pal = photoPalette(model, mode, P);
+  var cc = [];
+  for (var i = 0; i < cells.length; i++) { cc.push(pal[cells[i]]); }
+  var runs = pxRunsC(cc, G, G);
+  var s = "";
+  for (var col in runs) {
+    if (!runs.hasOwnProperty(col)) { continue; }
+    s += "<path fill='" + col + "' d='" + runs[col] + "'/>";
+  }
+  if (outline === "Ink") {
+    /* edges come from the MASTER palette ranks so the drawing's structure
+     * is the same in every mode; only the ink color follows the re-light */
+    var rank = photoRanks(model.palette);
+    var d = "";
+    for (var y = 0; y < G; y++) {
+      var x = 0;
+      while (x < G) {
+        if (photoEdgeAt(cells, rank, G, x, y)) {
+          var x0 = x;
+          while (x < G && photoEdgeAt(cells, rank, G, x, y)) { x++; }
+          d += "M" + x0 + " " + y + "h" + (x - x0) + "v1h-" + (x - x0) + "z";
+        } else { x++; }
+      }
+    }
+    if (d) {
+      s += "<path fill='" + photoDarkest(pal) + "' opacity='0.8' d='" + d + "'/>";
+    }
+  }
+  return s;
+}
+
+function photoOverlay(kind, G, P) {
+  if (kind === "Scanlines") {
+    return "<defs><pattern id='pso' width='1' height='2' patternUnits='userSpaceOnUse'>" +
+      "<rect width='1' height='1' fill='" + P.ink + "' opacity='0.16'/></pattern></defs>" +
+      "<rect width='" + G + "' height='" + G + "' fill='url(#pso)'/>";
+  }
+  if (kind === "Dots") {
+    return "<defs><pattern id='pdo' width='2' height='2' patternUnits='userSpaceOnUse'>" +
+      "<circle cx='1' cy='1' r='0.45' fill='" + P.ink + "' opacity='0.2'/></pattern></defs>" +
+      "<rect width='" + G + "' height='" + G + "' fill='url(#pdo)'/>";
+  }
+  return "";
+}
+
+/* seeded placeholder bust — drawn before any photo is loaded (and swept by
+ * the tests): backdrop bands, head, shoulders, eyes, a glow highlight */
+function photoPlaceholder(seed, key, salt, P) {
+  var rng = artDrawRng(seed, key, "ph", salt);
+  var n = 48;
+  var pal = [P.bg1, P.bg0, P.body, P.body2, P.ink, P.glow];
+  var cx = 24 + artRange(rng, -2.5, 2.5);
+  var cy = 17 + artRange(rng, -1.5, 1.5);
+  var rx = artRange(rng, 7.5, 9.5);
+  var ry = artRange(rng, 8.5, 10.5);
+  var sh = cy + ry + artRange(rng, 3, 6);   // shoulder line, just under the chin
+  var band = artRange(rng, 0.45, 0.62);
+  var cells = [];
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      var v = y < n * band ? 1 : 0;
+      if (y > sh + Math.abs(x - cx) * 0.28) { v = 3; }               // torso
+      if (Math.abs(x - cx) < 2.6 && y > cy && y <= sh + 2) { v = 2; } // neck
+      var hd = ((x - cx) * (x - cx)) / (rx * rx) +
+               ((y - cy) * (y - cy)) / (ry * ry);
+      if (hd < 1) {
+        v = 2;                                                       // face
+        if (y < cy - ry * 0.15 && hd > 0.42) { v = 4; }              // hair cap
+        else if (hd > 0.66 && x > cx) { v = 3; }                     // side shade
+      }
+      if (rng() < 0.05 && v === 1) { v = 0; }
+      cells.push(v);
+    }
+  }
+  /* 3x2 eyes + a 3x3 glow pin — sized to survive the 3x3 majority filter */
+  var ey = I(cy), dx2, dy2;
+  for (dy2 = 0; dy2 < 2; dy2++) {
+    for (dx2 = 0; dx2 < 3; dx2++) {
+      cells[(ey + dy2) * n + I(cx - 4) + dx2] = 4;
+      cells[(ey + dy2) * n + I(cx + 2) + dx2] = 4;
+    }
+  }
+  for (dy2 = 0; dy2 < 3; dy2++) {
+    for (dx2 = 0; dx2 < 3; dx2++) {
+      cells[(I(sh) + 4 + dy2) * n + I(cx - 1) + dx2] = 5;
+    }
+  }
+  return { cols: n, rows: n, cells: cells, palette: pal };
+}
+
+/* byte valve: photos are unpredictable — if a draw comes out too heavy for
+ * the 16000 b64 budget, redraw at the next-coarser grid (deterministic;
+ * 24x24 always fits) */
+function photoCompose(seed, salt, key, chosen, P) {
+  var model = ART_PHOTO_SRC || photoPlaceholder(seed, key, salt, P);
+  var bgKey = chosen.background === "Wash" ? "Wash" :
+              chosen.background === "Grid" ? "Grid" : "Plain";
+  var s = ART_BG[bgKey](artDrawRng(seed, key, "bg", salt), P);
+  var want = parseInt(chosen.grid, 10) || 48;
+  var opts = [48, 40, 32, 24];
+  var body = "";
+  var G = want;
+  for (var i = 0; i < opts.length; i++) {
+    if (opts[i] > want) { continue; }
+    G = opts[i];
+    body = photoDrawGrid(model, G, chosen.mode, chosen.outline, P);
+    if (body.length <= 11200) { break; }
+  }
+  return s + "<g transform='translate(40 40) scale(" + N(432 / G) +
+    ")' shape-rendering='crispEdges'>" + body +
+    photoOverlay(chosen.overlay, G, P) + "</g>";
+}
+
+/* ======================================================================
  * registry + composer
  * ====================================================================== */
 
@@ -2932,7 +3211,8 @@ var ART_STYLES = {
   seurat:  { label: "Seurat", palettes: SEURAT_PALETTES, slots: seuratSlots, compose: seuratCompose },
   punks:   { label: "Punks", palettes: PUNKS_PALETTES, slots: punksSlots, compose: punksCompose },
   minipunks: { label: "Minima Punks", palettes: MINIPUNK_PALETTES, slots: minipunksSlots, compose: minipunksCompose },
-  pandas:  { label: "Panda Punks", palettes: PANDA_PALETTES, slots: pandasSlots, compose: pandasCompose }
+  pandas:  { label: "Panda Punks", palettes: PANDA_PALETTES, slots: pandasSlots, compose: pandasCompose },
+  photo:   { label: "Photo Cartoon", palettes: null, slots: photoSlots, compose: photoCompose }
 };
 
 function artDefaultConfig(styleKey) {
@@ -3023,6 +3303,7 @@ if (typeof module !== "undefined" && module.exports) {
     artSeed: artSeed, artRng: artRng, artPickWeighted: artPickWeighted,
     artDefaultConfig: artDefaultConfig, artCapacity: artCapacity,
     artGenerate: artGenerate, artCollection: artCollection,
+    artSetPhoto: artSetPhoto,
     ART_PALETTES: ART_PALETTES, ART_STYLES: ART_STYLES
   };
 }
