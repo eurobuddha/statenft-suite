@@ -91,6 +91,50 @@ function artPhotoSync() {
   }
 }
 
+/* ---- AI cartoonizer: AnimeGAN (facepaint.onnx) via onnxruntime wasm.
+ * Lazy singleton; any failure falls back to the direct quantize+trace. */
+
+var ART_AI_SESSION = null;
+var ART_AI_STATE = "";   // "" | "loading" | "ready" | "failed"
+
+function artAiSession(cb) {
+  if (ART_AI_SESSION) { cb(ART_AI_SESSION); return; }
+  if (ART_AI_STATE === "failed" || typeof ort === "undefined") { cb(null); return; }
+  ART_AI_STATE = "loading";
+  try {
+    ort.env.wasm.numThreads = 1;   // no SharedArrayBuffer in the MDS webview
+    ort.env.wasm.wasmPaths = "./";
+    fetch("facepaint.onnx").then(function (r) {
+      if (!r.ok) { throw new Error("model " + r.status); }
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      return ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
+    }).then(function (s) {
+      ART_AI_SESSION = s;
+      ART_AI_STATE = "ready";
+      cb(s);
+    })["catch"](function () { ART_AI_STATE = "failed"; cb(null); });
+  } catch (e) { ART_AI_STATE = "failed"; cb(null); }
+}
+
+/* 512x512 canvas -> cb(cartoonized 512 canvas, or null on any failure) */
+function artAiCartoonize(cv512, cb) {
+  artAiSession(function (s) {
+    if (!s) { cb(null); return; }
+    try {
+      var d = cv512.getContext("2d").getImageData(0, 0, 512, 512).data;
+      var t = new ort.Tensor("float32", photoChw(d, 512), [1, 3, 512, 512]);
+      s.run({ input: t }).then(function (res) {
+        var rgba = photoRgbaFromChw(res.output.data, 512);
+        var oc = document.createElement("canvas");
+        oc.width = 512; oc.height = 512;
+        oc.getContext("2d").putImageData(new ImageData(rgba, 512, 512), 0, 0);
+        cb(oc);
+      })["catch"](function () { cb(null); });
+    } catch (e) { cb(null); }
+  });
+}
+
 $("photo-file").onchange = function () {
   var f = this.files && this.files[0];
   this.value = "";   // re-picking the same file must re-fire
@@ -101,26 +145,34 @@ $("photo-file").onchange = function () {
     img.onload = function () {
       var side = Math.min(img.width, img.height);
       var sx = (img.width - side) / 2, sy = (img.height - side) / 2;
-      var cv = document.createElement("canvas");
-      cv.width = 96; cv.height = 96;
-      var cx = cv.getContext("2d");
-      cx.drawImage(img, sx, sy, side, side, 0, 0, 96, 96);
-      var data;
-      try { data = cx.getImageData(0, 0, 96, 96).data; }
-      catch (e) { toast("could not read that image"); return; }
-      artSetPhoto(photoQuantize(data, 96, 96, 8));
-      $("photo-drop").style.backgroundImage =
-        "url(\"" + cv.toDataURL("image/png") + "\")";
-      $("photo-hint").innerText = "";
-      delete STYLE_THUMBS.photo;   // style card now shows the cartoonized photo
-      if (ART_STUDIO.style !== "photo") {
-        artActivateStyle("photo");
-        artSaveStudio();
-      }
-      artRenderStylePicker();
-      artRenderSlots();
-      artRenderPreview();
-      toast("photo cartoonized on-device");
+      var big = document.createElement("canvas");
+      big.width = 512; big.height = 512;
+      big.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, 512, 512);
+      $("photo-hint").innerText = "cartoonizing…";
+      artAiCartoonize(big, function (toon) {
+        var src = toon || big;
+        if (!toon) { toast("AI engine unavailable — direct trace used"); }
+        var cv = document.createElement("canvas");
+        cv.width = 96; cv.height = 96;
+        var cx = cv.getContext("2d");
+        cx.drawImage(src, 0, 0, 512, 512, 0, 0, 96, 96);
+        var data;
+        try { data = cx.getImageData(0, 0, 96, 96).data; }
+        catch (e) { toast("could not read that image"); artPhotoSync(); return; }
+        artSetPhoto(photoQuantize(data, 96, 96, 8));
+        $("photo-drop").style.backgroundImage =
+          "url(\"" + src.toDataURL("image/jpeg", 0.8) + "\")";
+        $("photo-hint").innerText = "";
+        delete STYLE_THUMBS.photo;   // style card now shows the cartoonized photo
+        if (ART_STUDIO.style !== "photo") {
+          artActivateStyle("photo");
+          artSaveStudio();
+        }
+        artRenderStylePicker();
+        artRenderSlots();
+        artRenderPreview();
+        toast(toon ? "photo AI-cartoonized on-device" : "photo traced on-device");
+      });
     };
     img.onerror = function () { toast("could not load that image"); };
     img.src = reader.result;

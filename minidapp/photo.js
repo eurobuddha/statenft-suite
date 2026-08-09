@@ -72,7 +72,34 @@ function photoQuantize(rgba, w, h, k) {
   return { cols: w, rows: h, cells: cells, palette: palette };
 }
 
+/* ---- AnimeGAN tensor glue (pure; the model itself runs page/native side) ----
+ * 512x512 RGBA <-> 1x3x512x512 float CHW in [-1, 1] */
+
+function photoChw(rgba, n) {
+  var px = n * n;
+  var out = new Float32Array(3 * px);
+  for (var i = 0; i < px; i++) {
+    out[i] = rgba[i * 4] / 127.5 - 1;
+    out[px + i] = rgba[i * 4 + 1] / 127.5 - 1;
+    out[2 * px + i] = rgba[i * 4 + 2] / 127.5 - 1;
+  }
+  return out;
+}
+
+function photoRgbaFromChw(chw, n) {
+  var px = n * n;
+  var out = new Uint8ClampedArray(px * 4);
+  for (var i = 0; i < px; i++) {
+    out[i * 4] = (chw[i] + 1) * 127.5;
+    out[i * 4 + 1] = (chw[px + i] + 1) * 127.5;
+    out[i * 4 + 2] = (chw[2 * px + i] + 1) * 127.5;
+    out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
 /* node-side tests need this on module.exports; the page just uses globals */
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { photoQuantize: photoQuantize };
+  module.exports = { photoQuantize: photoQuantize,
+                     photoChw: photoChw, photoRgbaFromChw: photoRgbaFromChw };
 }
