@@ -3130,8 +3130,12 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         pendingRecoveryId = 0;
         if (context == PICK_ARTPHOTO) {
             final Uri photoUri = uris.get(0);
+            toast("Cartoonizing on-device…");
             new Thread(() -> {
-                int[] px = ImageTools.gridPixels(this, photoUri, 96);
+                android.graphics.Bitmap big = ImageTools.squareBitmap(this, photoUri, 512);
+                android.graphics.Bitmap toon = big == null ? null : AiCartoon.cartoonize(this, big);
+                final boolean ai = toon != null;
+                int[] px = ImageTools.gridPixels(ai ? toon : big, 96);
                 final String rgba = px == null ? null : artRgbaJson(px);
                 runOnUiThread(() -> {
                     if (rgba == null) { toast("Could not read that photo"); return; }
@@ -3140,8 +3144,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         ART_THUMBS.remove("photo");
                         artItems = new JSONArray();
                         artPreviews.clear();
-                        toast(artPhotoLoaded ? "Photo cartoonized on-device"
-                                : "Could not process that photo");
+                        toast(!artPhotoLoaded ? "Could not process that photo"
+                                : ai ? "Photo AI-cartoonized on-device"
+                                     : "AI engine unavailable — photo traced directly");
                         if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
                     }));
                 });

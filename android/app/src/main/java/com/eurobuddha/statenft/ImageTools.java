@@ -143,29 +143,35 @@ public final class ImageTools {
         return Bitmap.createBitmap(src, x, y, side, side);
     }
 
-    /** EXIF-correct n×n pixel grid for the generative photo pack: decode
-     *  small via ImageDecoder (orientation applied once), center-crop
-     *  square, scale to n. Returns ARGB ints or null. */
-    public static int[] gridPixels(Context c, Uri uri, int n) {
+    /** EXIF-correct center-cropped square bitmap at px×px via ImageDecoder
+     *  (orientation applied once). Null on any failure. */
+    public static Bitmap squareBitmap(Context c, Uri uri, int px) {
         try {
             ImageDecoder.Source src = ImageDecoder.createSource(c.getContentResolver(), uri);
             Bitmap bmp = ImageDecoder.decodeBitmap(src, (d, info, s) -> {
                 d.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
                 int w = info.getSize().getWidth(), h = info.getSize().getHeight();
                 int max = Math.max(w, h);
-                if (max > 512) {
-                    float f = 512f / max;
+                if (max > px * 2) {
+                    float f = (px * 2f) / max;
                     d.setTargetSize(Math.max(1, Math.round(w * f)), Math.max(1, Math.round(h * f)));
                 }
             });
             if (bmp == null) return null;
-            Bitmap g = Bitmap.createScaledBitmap(centerSquare(bmp), n, n, true);
-            int[] px = new int[n * n];
-            g.getPixels(px, 0, n, 0, 0, n, n);
-            return px;
+            return Bitmap.createScaledBitmap(centerSquare(bmp), px, px, true);
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** n×n ARGB pixel grid of a bitmap (any size). */
+    public static int[] gridPixels(Bitmap bmp, int n) {
+        if (bmp == null) return null;
+        Bitmap g = bmp.getWidth() == n && bmp.getHeight() == n
+                ? bmp : Bitmap.createScaledBitmap(bmp, n, n, true);
+        int[] px = new int[n * n];
+        g.getPixels(px, 0, n, 0, 0, n, n);
+        return px;
     }
 
     private static String compressIconBitmap(Bitmap sq, int budget) {
