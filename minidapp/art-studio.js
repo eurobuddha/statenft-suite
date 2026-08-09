@@ -169,9 +169,11 @@ function artRenderSlots() {
             }
             row.querySelector(".pct").innerText = (v.on !== false && tot > 0
               ? Math.round((v.weight / tot) * 1000) / 10 : 0) + "%";
-            artSaveStudio();
+            /* save rides the same debounce as the redraw — keypair.set is a
+             * node round-trip, far too heavy for every drag tick */
             if (ART_REDRAW_TIMER) { clearTimeout(ART_REDRAW_TIMER); }
             ART_REDRAW_TIMER = setTimeout(function () {
+              artSaveStudio();
               artRenderSlots();
               artRenderPreview();
             }, 320);
@@ -423,6 +425,19 @@ $("g-mint-btn").onclick = function () {
   var iconItem = Math.max(1, Math.min(size,
     parseInt($("g-iconitem").value, 10) || 1));
 
+  /* per-item traits, sealed into token metadata by the engine (idx ->
+   * attributes) — same shape the Android engine writes, so both clients'
+   * viewers read one convention */
+  var traitsMap = {};
+  for (var ti = 0; ti < col.items.length; ti++) {
+    var attrs = [];
+    var ts = col.items[ti].traits || [];
+    for (var tk = 0; tk < ts.length; tk++) {
+      attrs.push({ trait_type: ts[tk].label, value: ts[tk].value });
+    }
+    traitsMap["" + col.items[ti].idx] = attrs;
+  }
+
   artSetStatus("g-status", "preparing mint…");
   $("g-mint-btn").disabled = true;
 
@@ -449,11 +464,11 @@ $("g-mint-btn").onclick = function () {
       var pk = res.response.publickey;
       MDS.sql(
         "INSERT INTO collections (name,description,mode,size,base,ext,phase," +
-        "posted,creatoraddr,creatorpk,origin,icon,webvalidate,externalurl) VALUES ('" +
+        "posted,creatoraddr,creatorpk,origin,icon,webvalidate,externalurl,itemtraits) VALUES ('" +
         engineSqlEsc(name) + "','" + engineSqlEsc(desc) + "','embed'," + size +
         ",'','','CREATE',0,'" + addr + "','" + pk + "','created','" +
         engineSqlEsc(iconB64) + "','" + engineSqlEsc(webValidate) + "','" +
-        engineSqlEsc(externalUrl) + "')",
+        engineSqlEsc(externalUrl) + "','" + engineSqlEsc(JSON.stringify(traitsMap)) + "')",
         function () {
           MDS.sql("SELECT id FROM collections WHERE name='" +
                   engineSqlEsc(name) + "' ORDER BY id DESC LIMIT 1",
@@ -580,7 +595,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.1", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.2", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

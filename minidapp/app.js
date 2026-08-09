@@ -512,6 +512,7 @@ function refreshProvenance() {
     // enrich hero from on-chain metadata (owner/external_url/icon are not in
     // the local DB for dapp-created rows)
     if (typeof t.name === "object") {
+      if (t.name.traits && !META.traits) { META.traits = t.name.traits; }
       if (t.name.owner && !META.owner) {
         META.owner = t.name.owner;
         $("d-owner").classList.remove("hidden");
@@ -785,6 +786,22 @@ function fillInspector(idx) {
   } else {
     $("lot-coin").innerText = "not tracked";
     $("lot-addr").innerText = "—";
+  }
+
+  /* traits: token metadata `traits` map (idx -> attributes), sealed at mint
+   * by either client's engine. Chain data — rendered via innerText only. */
+  var tlist = META.traits ? META.traits["" + idx] : null;
+  if (tlist && tlist.length) {
+    var tt = $("lot-traits");
+    tt.innerHTML = "";
+    for (var tq = 0; tq < tlist.length; tq++) {
+      var trow = tt.insertRow(-1);
+      trow.insertCell(0).innerText = "" + (tlist[tq].trait_type || "");
+      trow.insertCell(1).innerText = tlist[tq].value === undefined ? "" : "" + tlist[tq].value;
+    }
+    $("lot-traits-sec").classList.remove("hidden");
+  } else {
+    $("lot-traits-sec").classList.add("hidden");
   }
 
   $("cert-s0").innerText = "STATE:0 → " + idx + " · lot number";

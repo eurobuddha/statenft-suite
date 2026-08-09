@@ -101,7 +101,8 @@ var ENGINE_MIGRATIONS = [
   "`externalurl` varchar(512)",
   "`iscreator` int DEFAULT 0",
   "`postedat` int DEFAULT 0",
-  "`buriedat` int DEFAULT 0"
+  "`buriedat` int DEFAULT 0",
+  "`itemtraits` clob"
 ];
 
 function engineInitTables(cb) {
@@ -422,6 +423,11 @@ function enginePhaseCreatePost(row, tip, done) {
                                                 : "<artimage>" + row.ICON;
     }
     if (row.EXTERNALURL) { meta.external_url = row.EXTERNALURL; }
+    // per-item traits ride the token metadata (idx -> attributes), matching
+    // the Android engine — the chain is the trait record, not local SQL
+    if (row.ITEMTRAITS) {
+      try { meta.traits = JSON.parse(row.ITEMTRAITS); } catch (e) {}
+    }
     var cmd = "tokencreate name:" + JSON.stringify(meta) +
               " amount:" + row.SIZE + " decimals:0" +
               " script:\"" + engineScript(row.CREATORPK, row.MODE) + "\"" +

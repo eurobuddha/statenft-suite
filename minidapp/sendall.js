@@ -76,14 +76,20 @@ function sendTick(cb) {
     MDS.sql("SELECT * FROM send_queue WHERE status='ACTIVE'", function (res) {
       engineEach(res.rows || [], function (row, next) {
         engineTokenCoins(row.TOKENID, function (coins) {
-          if (coins.length === 0) {
-            MDS.log("Atelier send " + row.ID + ": all coins departed -> DONE");
+          /* only sealed identities travel — an unstamped blank must never
+           * hold the queue ACTIVE forever (it has no identity to preserve) */
+          var sealed = [];
+          for (var ci = 0; ci < coins.length; ci++) {
+            if (engineStamped(coins[ci]) !== null) { sealed.push(coins[ci]); }
+          }
+          if (sealed.length === 0) {
+            MDS.log("Atelier send " + row.ID + ": every sealed lot departed -> DONE" +
+              (coins.length ? " (" + coins.length + " unstamped coin(s) stay)" : ""));
             sendSetStatus(row.ID, "DONE", "", next);
             return;
           }
-          engineEach(coins, function (c, cnext) {
+          engineEach(sealed, function (c, cnext) {
             if (!enginePendingOk(c.coinid, tip)) { cnext(); return; }
-            if (engineStamped(c) === null) { cnext(); return; }   // unstamped stays
             var steps = sendPlanSteps(c, row.RECIPIENT, row.TOKENID,
                                       "sd" + row.ID);
             if (!steps) {
@@ -94,7 +100,15 @@ function sendTick(cb) {
             }
             engineMarkPending(c.coinid, tip);
             enginePostTxn("sd" + row.ID, steps, cnext, function (e) {
-              sendSetStatus(row.ID, "ERROR", e, cnext);
+              /* a failed post is only an error if the coin still exists — a
+               * user's manual transfer racing this queue spends it first, and
+               * that must not halt dispatch of the remaining lots */
+              MDS.cmd("coins coinid:" + c.coinid, function (chk) {
+                var arr = chk.status ? chk.response : null;
+                var present = arr && arr.length > 0;
+                if (!present) { cnext(); return; }   // departed by other means
+                sendSetStatus(row.ID, "ERROR", e, cnext);
+              });
             });
           }, next);
         }, function () { next(); });

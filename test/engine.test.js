@@ -82,6 +82,41 @@ check("url script is recognised", RE_NEW.test(engineScript(CREATOR, "url")), tru
 check("legacy script is recognised", RE_OLD.test(engineScriptLegacy(CREATOR)), true);
 check("creator key is extracted", RE_NEW.exec(engineScript(CREATOR, "embed"))[1], CREATOR);
 
+/* ---- tokencreate metadata: traits ride the token record ------------------ */
+/* enginePhaseCreatePost must seal row.ITEMTRAITS into meta.traits — the same
+ * convention the Android engine writes, so both clients' viewers read one
+ * on-chain shape. Capture the actual tokencreate command via the MDS stub. */
+console.log("enginePhaseCreatePost — itemtraits sealed into token metadata");
+{
+  let captured = "";
+  sandbox.MDS.cmd = (c, cb) => {
+    if (String(c).indexOf("tokencreate") === 0) { captured = c; }
+    cb({ status: true, response: {} });
+  };
+  sandbox.MDS.sql = (q, cb) => { if (cb) cb({ status: true, rows: [] }); };
+  const traits = { "1": [{ trait_type: "Palette", value: "Verm" }],
+                   "2": [{ trait_type: "Eyes", value: "Laser" }] };
+  sandbox.enginePhaseCreatePost({
+    ID: 1, POSTED: 0, NAME: "T", DESCRIPTION: "", MODE: "embed", SIZE: 2,
+    CREATORPK: CREATOR, ITEMTRAITS: JSON.stringify(traits)
+  }, 100, () => {});
+  const metaJson = captured.slice(captured.indexOf("name:") + 5,
+                                  captured.indexOf(" amount:"));
+  let meta = {};
+  try { meta = JSON.parse(metaJson); } catch (e) {}
+  check("tokencreate carries a traits map", !!meta.traits, true);
+  check("traits survive verbatim", JSON.stringify(meta.traits), JSON.stringify(traits));
+  check("malformed itemtraits is dropped, not fatal", (() => {
+    let cap2 = "";
+    sandbox.MDS.cmd = (c, cb) => { if (String(c).indexOf("tokencreate") === 0) cap2 = c; cb({ status: true, response: {} }); };
+    sandbox.enginePhaseCreatePost({ ID: 2, POSTED: 0, NAME: "U", DESCRIPTION: "",
+      MODE: "embed", SIZE: 2, CREATORPK: CREATOR, ITEMTRAITS: "{broken" }, 100, () => {});
+    return cap2.indexOf("traits") === -1 && cap2.indexOf("tokencreate") === 0;
+  })(), true);
+  sandbox.MDS.cmd = () => {};
+  sandbox.MDS.sql = () => {};
+}
+
 /* ---- misc --------------------------------------------------------------- */
 console.log("engineSqlEsc / graveyard");
 check("single quotes doubled", engineSqlEsc("O'Brien"), "O''Brien");
