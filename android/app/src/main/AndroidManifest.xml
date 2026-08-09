@@ -25,6 +25,10 @@
         android:theme="@style/Theme.StateNFT"
         tools:targetApi="31">
         <activity
+            android:name=".FiltrActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" />
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"

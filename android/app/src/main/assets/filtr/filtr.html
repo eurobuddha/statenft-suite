@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<!-- FILTR WebView host for the Android app. The #view-filtr markup below is
+     COPIED from minidapp/index.html (keep in sync when the tab changes);
+     filtr-engine.js + filtr.js + styles.css are byte-identical copies
+     enforced by test/run.sh's bridge parity gate. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FILTR</title>
+<link rel="stylesheet" href="styles.css">
+<style>body { padding: 0.7rem; } .filtr-stage { height: 46vh; }</style>
+</head>
+<body>
+<script>
+/* Atelier page globals, Android-bridged */
+function $(id) { return document.getElementById(id); }
+function toast(m) { if (window.AndroidFiltr) AndroidFiltr.toastMsg("" + m); }
+function show() {}
+function studioShow() {}
+function artStudioEnter() {}
+function loadCollectionList() {}
+var NFT_ART = "";
+var ARTIMAGE_BUDGET = 9000;
+/* send-to-mint lands here after filtr.js sets NFT_ART */
+function nftArtShow() {
+  if (window.AndroidFiltr && NFT_ART) AndroidFiltr.sendToMint(NFT_ART);
+}
+/* send-to-photo hands the 512 square straight across the bridge */
+function artPhotoIntake(cv) {
+  if (window.AndroidFiltr)
+    AndroidFiltr.sendToPhoto(cv.toDataURL("image/png").split(",")[1]);
+}
+/* downloads: blob -> base64 -> MediaStore via the bridge */
+function downloadBlob(name, data, mime) {
+  var blob = (data instanceof Blob) ? data : new Blob([data], { type: mime });
+  var r = new FileReader();
+  r.onload = function () {
+    if (window.AndroidFiltr)
+      AndroidFiltr.saveImage(name, ("" + r.result).split(",")[1]);
+  };
+  r.readAsDataURL(blob);
+}
+</script>
+<section id="view-filtr" >
+    <div id="filtr-unsupported" class="empty-state hidden">
+      <p class="empty-glyph">&#9670;</p>
+      <p>FILTR needs WebGL2, which this device's webview doesn't provide.
+         Open Atelier on a desktop browser or a newer device.</p>
+    </div>
+    <div id="filtr-layout" class="filtr-layout">
+      <div class="filtr-rail">
+        <div class="filtr-panel">
+          <p class="wizard-kick">Import</p>
+          <label class="art-drop filtr-drop" id="filtr-drop">
+            <span id="filtr-drop-hint">+ drop / tap to choose &middot; paste &#8984;V</span>
+            <input type="file" accept="image/*" class="slot-input" id="filtr-file"/>
+          </label>
+          <p class="filtr-meta mono" id="filtr-meta">no image loaded</p>
+        </div>
+        <div class="filtr-panel">
+          <p class="wizard-kick">Effects</p>
+          <div id="filtr-fx-list"></div>
+        </div>
+        <div class="filtr-panel">
+          <p class="wizard-kick">Presets</p>
+          <div id="filtr-presets" class="filtr-presets"></div>
+        </div>
+      </div>
+      <div class="filtr-center">
+        <div class="toolbar filtr-toolbar">
+          <button class="filtr-tool" id="filtr-tool-crop">Crop</button>
+          <button class="filtr-tool" id="filtr-rotl" title="rotate left">&#10226;</button>
+          <button class="filtr-tool" id="filtr-rotr" title="rotate right">&#10227;</button>
+          <button class="filtr-tool" id="filtr-fliph">Flip H</button>
+          <button class="filtr-tool" id="filtr-flipv">Flip V</button>
+          <button class="filtr-tool" id="filtr-tool-erase">Erase</button>
+          <button class="filtr-tool" id="filtr-resize">Resize</button>
+          <button class="filtr-tool" id="filtr-tool-bubble">Bubble</button>
+          <button class="filtr-tool" id="filtr-tool-text">Text</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="filtr-tool" id="filtr-undo">Undo</button>
+          <button class="filtr-tool" id="filtr-redo">Redo</button>
+          <button class="filtr-tool warn" id="filtr-ab" title="hold to compare">A/B</button>
+          <button class="filtr-tool" id="filtr-fit">Fit</button>
+          <span class="filtr-note" id="filtr-zoominfo"></span>
+        </div>
+        <div class="filtr-stage" id="filtr-stage">
+          <div id="filtr-zoomwrap" class="filtr-zoomwrap">
+            <canvas id="filtr-canvas"></canvas>
+            <div id="filtr-overlay" class="filtr-overlay"></div>
+            <div id="filtr-cropbox" class="filtr-cropbox hidden"></div>
+          </div>
+        </div>
+        <div class="toolbar filtr-toolbar" id="filtr-toolopts"></div>
+        <div class="toolbar filtr-toolbar">
+          <button class="btn btn-gold" id="filtr-apply"
+                  title="bake the current look into the image, then layer the next effect">
+            Apply &mdash; bake &amp; continue</button>
+          <p id="filtr-status" class="modal-status" style="margin:0"></p>
+        </div>
+      </div>
+      <div class="filtr-rail">
+        <div class="filtr-acc open">
+          <h4><span id="filtr-fx-name">Effect</span><span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-fx-controls"></div>
+        </div>
+        <div class="filtr-acc open">
+          <h4>Adjustments<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-adjust-controls"></div>
+        </div>
+        <div class="filtr-acc">
+          <h4>Post FX<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-post-controls"></div>
+        </div>
+        <div class="filtr-acc">
+          <h4>Annotate<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody" id="filtr-annotate-controls"></div>
+        </div>
+        <div class="filtr-acc open">
+          <h4>Save<span class="arr">&#9662;</span></h4>
+          <div class="filtr-accbody">
+            <button class="btn btn-gold filtr-savebtn" id="filtr-save-mint">Send to NFT mint &rarr;</button>
+            <button class="btn filtr-savebtn" id="filtr-save-photo">Send to Photo Cartoon &rarr;</button>
+            <button class="btn btn-ghost filtr-savebtn" id="filtr-save-png">Download PNG</button>
+            <button class="btn btn-ghost filtr-savebtn" id="filtr-save-jpg">Download JPG</button>
+            <p class="cert-note">Everything runs on this device. Send-to-mint
+              compresses the flattened image into the Single-NFT wizard
+              (&le;9000 b64); Photo Cartoon feeds it to the AI collection pack.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+<script src="filtr-engine.js"></script>
+<script src="filtr.js"></script>
+<script>filtrEnter();</script>
+</body>
+</html>

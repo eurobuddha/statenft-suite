@@ -1321,6 +1321,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         body.addView(studioCard("№ 4", "Generative Collection",
                 "18 on-chain SVG style packs — Mandala to Panda Punks. Deterministic from a seed, rarity sliders, traits auto-filled.",
                 "artBox", v -> renderGenerative()), lpm(0, 0, 0, 14));
+        body.addView(studioCard("№ 5", "FILTR — image editor",
+                "Crop, rotate, erase; 15 filter effects, presets, comic bubbles and text. Save, or send straight into a mint.",
+                "filtr", v -> startActivity(new android.content.Intent(this, FiltrActivity.class))), lpm(0, 0, 0, 14));
 
         /* drafts shelf */
         boolean hasNftDraft = !nftName.trim().isEmpty() || !nftImage.isEmpty() || !nftTraits.isEmpty();
@@ -2381,6 +2384,60 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         }).start();
     }
 
+    /** The AI-photo pipeline from a 512 square bitmap (worker thread):
+     *  cartoonize -> quantize -> bridge setPhoto. Fed by the picker AND by
+     *  the FILTR handoff. */
+    @Override protected void onResume() {
+        super.onResume();
+        String mint = FiltrActivity.pendingMint;
+        if (mint != null && !mint.isEmpty()) {
+            FiltrActivity.pendingMint = null;
+            nftImage = mint;
+            toast("FILTR image loaded into the NFT wizard");
+            renderCreateNft();
+        }
+        String photo = FiltrActivity.pendingPhoto;
+        if (photo != null && !photo.isEmpty()) {
+            FiltrActivity.pendingPhoto = null;
+            toast("Cartoonizing on-device…");
+            new Thread(() -> {
+                try {
+                    byte[] raw = android.util.Base64.decode(photo, android.util.Base64.DEFAULT);
+                    android.graphics.Bitmap b =
+                            android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length);
+                    artPhotoFromBitmap(b == null ? null
+                            : android.graphics.Bitmap.createScaledBitmap(b, 512, 512, true));
+                } catch (Throwable t) {
+                    runOnUiThread(() -> toast("Could not read the FILTR image"));
+                }
+            }).start();
+            runOnUiThread(this::renderGenerative);
+        }
+    }
+
+    private void artPhotoFromBitmap(android.graphics.Bitmap big) {
+        android.graphics.Bitmap toon = big == null ? null : AiCartoon.cartoonize(this, big);
+        final boolean ai = toon != null;
+        int[] px = ImageTools.gridPixels(ai ? toon : big, 96);
+        final String rgba = px == null ? null : artRgbaJson(px);
+        /* AI paintings are flat — richer 10-color trace, and the
+         * painting itself rides along for the Painted finish */
+        final String paint = ai ? ImageTools.paintB64(toon, 7600) : "";
+        runOnUiThread(() -> {
+            if (rgba == null) { toast("Could not read that photo"); return; }
+            ArtStudio.with(this, s -> s.setPhoto(rgba, ai ? 10 : 8, paint, k -> {
+                artPhotoLoaded = k > 0;
+                ART_THUMBS.remove("photo");
+                artItems = new JSONArray();
+                artPreviews.clear();
+                toast(!artPhotoLoaded ? "Could not process that photo"
+                        : ai ? "Photo AI-cartoonized on-device"
+                             : "AI engine unavailable — photo traced directly");
+                if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
+            }));
+        });
+    }
+
     /** ARGB pixels -> the flat [r,g,b,a,...] JSON array photoQuantize expects. */
     private static String artRgbaJson(int[] px) {
         StringBuilder sb = new StringBuilder(px.length * 12 + 2);
@@ -3163,26 +3220,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             toast("Cartoonizing on-device…");
             new Thread(() -> {
                 android.graphics.Bitmap big = ImageTools.squareBitmap(this, photoUri, 512);
-                android.graphics.Bitmap toon = big == null ? null : AiCartoon.cartoonize(this, big);
-                final boolean ai = toon != null;
-                int[] px = ImageTools.gridPixels(ai ? toon : big, 96);
-                final String rgba = px == null ? null : artRgbaJson(px);
-                /* AI paintings are flat — richer 10-color trace, and the
-                 * painting itself rides along for the Painted finish */
-                final String paint = ai ? ImageTools.paintB64(toon, 7600) : "";
-                runOnUiThread(() -> {
-                    if (rgba == null) { toast("Could not read that photo"); return; }
-                    ArtStudio.with(this, s -> s.setPhoto(rgba, ai ? 10 : 8, paint, k -> {
-                        artPhotoLoaded = k > 0;
-                        ART_THUMBS.remove("photo");
-                        artItems = new JSONArray();
-                        artPreviews.clear();
-                        toast(!artPhotoLoaded ? "Could not process that photo"
-                                : ai ? "Photo AI-cartoonized on-device"
-                                     : "AI engine unavailable — photo traced directly");
-                        if (screen == Screen.CREATE_GENERATIVE) renderGenerative();
-                    }));
-                });
+                artPhotoFromBitmap(big);
             }).start();
             return;
         }
