@@ -214,17 +214,44 @@ public final class MintEngine {
                 if (LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) ready.add(c);
             }
             if (ready.isEmpty()) { done.done("Splits confirming…"); return; }
-            splitNext(ctx, node, row, tip, ready, 0, done);
+            /* Every token-carrying output (and the input) embeds the FULL token
+             * definition — icon + per-item traits included. A generative
+             * collection's definition runs ~11KB, so the old fixed 3-unit batch
+             * built ~55KB+ txns that the node accepted and the chain silently
+             * rejected: the split retried forever with no error. Measure the
+             * definition once and size the batch to fit the 64KB TxPoW. */
+            node.cmd("tokens tokenid:" + row.optString("tokenid"), new NodeApi.Cb() {
+                @Override public void onResult(JSONObject json) {
+                    Object r = json.opt("response");
+                    int defLen = r == null ? 4000 : r.toString().length();
+                    splitNext(ctx, node, row, tip, ready, 0, defLen, done);
+                }
+                @Override public void onError(String message) {
+                    splitNext(ctx, node, row, tip, ready, 0, 12000, done);  // unknown: be conservative
+                }
+            });
         }, e -> setError(ctx, row, e, done));
     }
 
+    /** Unit outputs per split txn such that (k units + change + input) token
+     *  definitions stay within ~40KB, leaving 24KB headroom for the signature
+     *  and proofs under the 64KB TxPoW cap. Legacy ~7KB definitions still get
+     *  the proven 3-unit batches; ~11KB generative definitions drop to 1. */
+    static int splitBatch(int defLen) {
+        int defs = Math.max(1, 40000 / Math.max(1, defLen));   // total defs that fit
+        return Math.max(1, Math.min(3, defs - 2));             // minus input + change
+    }
+
     private static void splitNext(Context ctx, NodeApi node, JSONObject row, int tip,
-                                  List<JSONObject> bigs, int i, Done done) {
+                                  List<JSONObject> bigs, int i, int defLen, Done done) {
         if (i >= bigs.size()) { done.done("Posted " + bigs.size() + " split(s)"); return; }
         JSONObject c = bigs.get(i);
         LocalStore.setPending(ctx, c.optString("coinid"), tip);
-        splitCoin(node, row, c, Math.min(3, parseInt(c.optString("tokenamount", "1"))),
-                () -> splitNext(ctx, node, row, tip, bigs, i + 1, done),
+        int k = Math.min(splitBatch(defLen), parseInt(c.optString("tokenamount", "1")));
+        android.util.Log.d("StateNFT", "split " + row.optString("name") + ": defLen=" + defLen
+                + " batch=" + k + " coin=" + c.optString("tokenamount"));
+        splitCoin(node, row, c, k,
+                () -> splitNext(ctx, node, row, tip, bigs, i + 1, defLen, done),
                 e -> setError(ctx, row, e, done));
     }
 
@@ -535,6 +562,8 @@ public final class MintEngine {
     }
 
     private static void setError(Context ctx, JSONObject row, String error, Done done) {
+        android.util.Log.d("StateNFT", "engine error [" + row.optString("name") + " · "
+                + row.optString("phase") + "]: " + error);
         put(row, "error", error);
         LocalStore.upsert(ctx, row);
         done.done(error);

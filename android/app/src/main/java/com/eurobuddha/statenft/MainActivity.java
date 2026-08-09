@@ -367,6 +367,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         t.setSingleLine(true);
         t.setEllipsize(android.text.TextUtils.TruncateAt.END);
         bar.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView ver = Design.text(this, "№ " + BuildConfig.VERSION_NAME, 9.5f, Design.DIM(), Design.mono());
+        ver.setLetterSpacing(0.08f);
+        ver.setPadding(dp(6), 0, 0, 0);
+        bar.addView(ver);
         nodeDot = Design.text(this, "▪", 16, node != null && node.isEnabled() ? Design.ACCENT() : Design.SOFT(), Design.sansBold());
         nodeDot.setPadding(dp(6), 0, 0, 0);
         nodeDot.setOnClickListener(v -> renderManage());

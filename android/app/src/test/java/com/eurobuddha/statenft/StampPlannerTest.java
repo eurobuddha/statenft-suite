@@ -10,6 +10,17 @@ import static org.junit.Assert.*;
 
 public class StampPlannerTest {
 
+    /* (k units + change + input) full token definitions must fit ~40KB under
+     * the 64KB TxPoW cap — a fixed 3-unit batch silently stalled generative
+     * mints whose ~11KB definitions built txns the chain rejected quietly. */
+    @Test public void splitBatchSizesToTokenDefinition() {
+        assertEquals(3, MintEngine.splitBatch(7000));    // legacy: proven batch
+        assertEquals(1, MintEngine.splitBatch(11079));   // generative: unit + change
+        assertEquals(3, MintEngine.splitBatch(500));     // tiny: capped
+        assertEquals(2, MintEngine.splitBatch(10000));
+        assertEquals(1, MintEngine.splitBatch(90000));   // degenerate: floor 1
+    }
+
     @Test public void assignsLowestFreeIndicesInOrder() {
         HashSet<String> used = new HashSet<>(Arrays.asList("1", "3"));
         List<String[]> plan = MintEngine.planAssignments(Arrays.asList("cA", "cB", "cC"), used, 5);

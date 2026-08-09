@@ -117,6 +117,18 @@ console.log("enginePhaseCreatePost — itemtraits sealed into token metadata");
   sandbox.MDS.sql = () => {};
 }
 
+/* ---- split batch sizing -------------------------------------------------- */
+/* (k units + change + input) full token definitions must fit ~40KB under the
+ * 64KB TxPoW cap. A fixed 3-unit batch silently stalled generative mints:
+ * their ~11KB definitions (icon + 20 items' traits) built ~55KB txns the
+ * chain rejected without an error. */
+console.log("engineSplitBatch — outputs sized to the token definition");
+check("legacy ~7KB definition keeps the proven 3-unit batch", sandbox.engineSplitBatch(7000), 3);
+check("generative ~11KB definition drops to 1 unit + change", sandbox.engineSplitBatch(11079), 1);
+check("tiny definition capped at 3", sandbox.engineSplitBatch(500), 3);
+check("~10KB definition fits 2", sandbox.engineSplitBatch(10000), 2);
+check("degenerate definition still yields 1", sandbox.engineSplitBatch(90000), 1);
+
 /* ---- misc --------------------------------------------------------------- */
 console.log("engineSqlEsc / graveyard");
 check("single quotes doubled", engineSqlEsc("O'Brien"), "O''Brien");

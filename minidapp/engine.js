@@ -500,13 +500,32 @@ function enginePhaseSplit(row, tip, done) {
     if (units >= row.SIZE && bigs.length === 0) {
       engineSetPhase(row, "STAMP", done); return;
     }
-    engineEach(bigs, function (c, next) {
-      if (!enginePendingOk(c.coinid, tip)) { next(); return; }
-      engineMarkPending(c.coinid, tip);
-      engineSplitCoin(row, c, 3, next,
-        function (e) { engineSetError(row, e, next); });
-    }, done);
+    /* Every token-carrying output (and the input) embeds the FULL token
+     * definition — icon + per-item traits included. A generative collection's
+     * definition runs ~11KB, so a fixed 3-unit batch builds ~55KB+ txns that
+     * the node accepts and the chain silently rejects — the split would retry
+     * forever with no error. Measure the definition once, size the batch. */
+    MDS.cmd("tokens tokenid:" + row.TOKENID, function (tres) {
+      var defLen = (tres.status && tres.response)
+        ? JSON.stringify(tres.response).length : 12000;
+      var batch = engineSplitBatch(defLen);
+      engineEach(bigs, function (c, next) {
+        if (!enginePendingOk(c.coinid, tip)) { next(); return; }
+        engineMarkPending(c.coinid, tip);
+        engineSplitCoin(row, c, batch, next,
+          function (e) { engineSetError(row, e, next); });
+      }, done);
+    });
   }, function (e) { engineSetError(row, e, done); });
+}
+
+/** Unit outputs per split txn such that (k units + change + input) token
+ *  definitions stay within ~40KB — 24KB headroom for signature + proofs under
+ *  the 64KB TxPoW cap. Legacy ~7KB definitions keep the proven 3-unit batch;
+ *  ~11KB generative definitions drop to 1. */
+function engineSplitBatch(defLen) {
+  var defs = Math.max(1, Math.floor(40000 / Math.max(1, defLen)));
+  return Math.max(1, Math.min(3, defs - 2));
 }
 
 function enginePhaseStamp(row, tip, done) {
