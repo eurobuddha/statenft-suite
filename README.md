@@ -38,6 +38,13 @@ stripped or forged.
 > 16000 b64 per item (the transfer-proven envelope); the 18 original packs
 > stay tuned and test-swept at 8192.
 
+> **v4.1.6 — Smooth vector render.** The photo pack's default render is now
+> a smooth flat-vector trace: 96px intake, marching-squares contours per
+> color region simplified into curved shapes — a proper vector portrait, with
+> an optional ink-contour comic outline. Pixel mosaic stays as a variant.
+> Identical on both clients (the tracer ships verbatim in the Android
+> bridge).
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed
