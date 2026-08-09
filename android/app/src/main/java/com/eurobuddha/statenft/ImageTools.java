@@ -178,8 +178,10 @@ public final class ImageTools {
      *  size/quality rung that fits wins (the Painted finish's image). */
     public static String paintB64(Bitmap src, int budget) {
         if (src == null) return "";
-        int[] dims = {384, 320, 256, 208};
-        int[] quals = {82, 72, 62, 50};
+        // floor rungs are the guarantee: paprika paintings measured 8.3-9.2K
+        // b64 at 208q50 — an empty return silently kills every Painted plate
+        int[] dims = {384, 320, 256, 208, 176, 152, 128};
+        int[] quals = {82, 72, 62, 50, 42};
         for (int dim : dims) {
             Bitmap scaled = Bitmap.createScaledBitmap(src, dim, dim, true);
             for (int q : quals) {

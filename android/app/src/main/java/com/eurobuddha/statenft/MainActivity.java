@@ -2301,6 +2301,12 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             String[] images = new String[itemsF.length()];
             JSONObject traitsMap = new JSONObject();
             String err = "";
+            // the photo pack seals only its rarity axes — freed record bytes
+            // pay for full-quality Painted plates under the joint budget
+            java.util.HashSet<String> sealed = "photo".equals(artStyle)
+                    ? new java.util.HashSet<>(java.util.Arrays.asList(
+                        "palette", "finish", "render", "mode"))
+                    : null;
             for (int i = 0; i < itemsF.length(); i++) {
                 JSONObject it = itemsF.optJSONObject(i);
                 String svg = it == null ? "" : SvgSanitizer.sanitize(it.optString("svg"));
@@ -2316,6 +2322,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 if (ts != null) for (int k = 0; k < ts.length(); k++) {
                     JSONObject t = ts.optJSONObject(k);
                     if (t == null) continue;
+                    if (sealed != null && !sealed.contains(t.optString("slot"))) continue;
                     JSONObject a = new JSONObject();
                     put(a, "trait_type", t.optString("label"));
                     put(a, "value", t.optString("value"));
@@ -2422,7 +2429,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         final String rgba = px == null ? null : artRgbaJson(px);
         /* AI paintings are flat — richer 10-color trace, and the
          * painting itself rides along for the Painted finish */
-        final String paint = ai ? ImageTools.paintB64(toon, 7600) : "";
+        final String paint = ai ? ImageTools.paintB64(toon, 10200) : "";
         runOnUiThread(() -> {
             if (rgba == null) { toast("Could not read that photo"); return; }
             ArtStudio.with(this, s -> s.setPhoto(rgba, ai ? 10 : 8, paint, k -> {

@@ -139,10 +139,13 @@ function artAiCartoonize(cv512, cb) {
  * that fits wins. 7600 b64 chars of paint keeps the whole Painted plate
  * (~10.9K b64 in coin state) inside the 23000 joint transfer budget beside
  * an unsigned ~12K record — the 'Math' lesson, enforced by the engine. */
-var ART_PAINT_BUDGET = 7600;
+var ART_PAINT_BUDGET = 10200;
 function artPaintB64(cv) {
-  var dims = [384, 320, 256, 208];
-  var quals = [0.82, 0.72, 0.62, 0.5];
+  /* the floor rungs are the guarantee: paprika paintings measured 8.3-9.2K
+   * at 208q50 — a ladder that can come back empty silently kills every
+   * Painted plate (the vanished-paprika bug, 2026-08-10) */
+  var dims = [384, 320, 256, 208, 176, 152, 128];
+  var quals = [0.82, 0.72, 0.62, 0.5, 0.42];
   for (var d = 0; d < dims.length; d++) {
     var oc = document.createElement("canvas");
     oc.width = dims[d]; oc.height = dims[d];
@@ -173,7 +176,12 @@ function artPhotoIntake(big) {
     /* AI paintings are flat — they afford a richer 10-color trace; the
      * painting itself rides along for the Painted finish */
     var model = photoQuantize(data, 96, 96, toon ? 10 : 8);
-    if (toon) { model.paint = artPaintB64(toon); }
+    if (toon) {
+      model.paint = artPaintB64(toon);
+      if (!model.paint) {
+        toast("painting won't fit on-chain — Painted plates will be vector");
+      }
+    }
     artSetPhoto(model);
     $("photo-drop").style.backgroundImage =
       "url(\"" + src.toDataURL("image/jpeg", 0.8) + "\")";
@@ -546,6 +554,20 @@ function svgToIconB64(svg, cb, budget) {
  * computed EXACTLY here: the same metadata JSON the engine will seal, plus the
  * measured 533-byte record wrapper (constant across every minted collection).
  * The split bound (3 defs + sig at unit+change) is kept alongside. */
+/* which trait slots get sealed on-chain per style: the photo pack keeps its
+ * rarity axes only (detail/background/outline/overlay stay app-local) so
+ * the record leaves room for the Painted jpeg inside the joint transfer
+ * budget; every other pack seals everything (existing on-chain shape). */
+var ART_SEALED_PHOTO_SLOTS = { palette: 1, finish: 1, render: 1, mode: 1 };
+function artSealedTraits(styleKey, traits) {
+  if (styleKey !== "photo") { return traits; }
+  var out = [];
+  for (var i = 0; i < traits.length; i++) {
+    if (ART_SEALED_PHOTO_SLOTS[traits[i].slot]) { out.push(traits[i]); }
+  }
+  return out;
+}
+
 var ART_TRANSFER_PAIR_BUDGET = 23000;
 var ART_DEF_WRAPPER = 533;
 var ART_DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
@@ -631,11 +653,14 @@ $("g-mint-btn").onclick = function () {
 
   /* per-item traits, sealed into token metadata by the engine (idx ->
    * attributes) — same shape the Android engine writes, so both clients'
-   * viewers read one convention */
+   * viewers read one convention. The photo pack seals only its rarity
+   * axes: the freed record bytes are what pay for full-quality Painted
+   * plates under the joint transfer budget (all traits stay visible
+   * in-app via art_meta). */
   var traitsMap = {};
   for (var ti = 0; ti < col.items.length; ti++) {
     var attrs = [];
-    var ts = col.items[ti].traits || [];
+    var ts = artSealedTraits(ART_STUDIO.style, col.items[ti].traits || []);
     for (var tk = 0; tk < ts.length; tk++) {
       attrs.push({ trait_type: ts[tk].label, value: ts[tk].value });
     }
@@ -833,7 +858,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.11", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.1.12", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

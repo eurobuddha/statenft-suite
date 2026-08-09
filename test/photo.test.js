@@ -85,11 +85,11 @@ ok(qflat.palette.length === 1, "flat photo quantizes to a single color");
 /* ---- photo pack integration (the real-photo path, not the placeholder) ---- */
 
 var cfg = art.artDefaultConfig("photo");
-/* worst-case paint: a full-budget 7600-char b64 string, so every Painted
+/* worst-case paint: a full-budget 10200-char b64 string, so every Painted
  * draw in the sweeps below proves the budget holds at maximum paint size */
 var PAINT = "";
-while (PAINT.length < 7600) { PAINT += "QUJDRA=="; }
-PAINT = PAINT.slice(0, 7600);
+while (PAINT.length < 10200) { PAINT += "QUJDRA=="; }
+PAINT = PAINT.slice(0, 10200);
 q1.paint = PAINT;
 art.artSetPhoto(q1);
 
@@ -157,8 +157,8 @@ var pItem = art.artGenerate("painted-seed", "1", soloP);
 ok(pItem.svg.indexOf("<image ") !== -1 &&
    pItem.svg.indexOf(PAINT.slice(0, 64)) !== -1,
    "Painted finish embeds the painting");
-ok(b64(pItem.svg.length) <= 11400,
-   "full-budget Painted plate within the 11400 joint allowance (" + b64(pItem.svg.length) + "B)");
+ok(b64(pItem.svg.length) <= 15200,
+   "full-budget Painted plate within the 15200 joint allowance (" + b64(pItem.svg.length) + "B)");
 ok(pItem.svg === art.artGenerate("painted-seed", "1", soloP).svg,
    "Painted draw is deterministic");
 

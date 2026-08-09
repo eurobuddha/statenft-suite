@@ -83,6 +83,14 @@ stripped or forged.
 > Cartoon pack. Everything on-device; regenerate the engine bundle with
 > filtrport/build.sh.
 
+> **v4.1.12 — Painted plates restored.** The 4.1.10 budget tightening made
+> real paprika paintings miss every rung of the paint-compression ladder,
+> silently turning ALL Painted plates into vector fallbacks. Fixed by
+> measurement: the ladder now runs down to a guaranteed-fit floor, the
+> photo pack seals only its four rarity axes on-chain (freed record bytes
+> pay for ~208–256px paintings inside the joint transfer budget), and an
+> honest toast fires if a painting ever can't fit.
+
 ## How it works
 
 Minima tokens are colored coins: token metadata (name/url/description) is fixed

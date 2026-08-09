@@ -125,6 +125,28 @@ if (threw === null) {
         renderThrew && renderThrew.message);
 }
 
+/* ---- sealed-traits slimming: the Painted-bytes trade ------------------- */
+if (threw === null && typeof sandbox.artSealedTraits === "function") {
+  const traits = [
+    { slot: "palette", label: "Palette", value: "Ocean" },
+    { slot: "finish", label: "Finish", value: "Painted" },
+    { slot: "render", label: "Render", value: "Smooth" },
+    { slot: "mode", label: "Mode", value: "Natural" },
+    { slot: "grid", label: "Detail", value: "48" },
+    { slot: "background", label: "Background", value: "Wash" },
+    { slot: "outline", label: "Outline", value: "Ink" },
+    { slot: "overlay", label: "Overlay", value: "None" },
+  ];
+  const photo = sandbox.artSealedTraits("photo", traits);
+  check("photo pack seals only the 4 rarity axes", photo.length === 4 &&
+        photo.every((t) => ["palette", "finish", "render", "mode"].includes(t.slot)),
+        "got " + photo.map((t) => t.slot).join(","));
+  const gen = sandbox.artSealedTraits("mandala", traits);
+  check("generative packs seal everything (unchanged shape)", gen.length === 8);
+} else {
+  check("artSealedTraits exists", false, "missing from art-studio.js");
+}
+
 /* ---- 2. every requested id exists in index.html ------------------------ */
 
 console.log("index.html — id cross-check");
