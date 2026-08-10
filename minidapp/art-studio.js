@@ -27,6 +27,7 @@ var ART_EMBED_BUDGET = 16000; // base64 bytes per item — IMG_BUDGET's on-chain
                               // generative packs stay test-swept at 8192; the
                               // photo pack uses the headroom.
 var ART_REDRAW_TIMER = null;
+var ART_PHOTO_MAXRAW = 0;   // photo trace valve; set per-envelope by artSetPhotoValve (0 = pack default)
 
 function artSetStatus(id, msg, cls) {
   var el = $(id);
@@ -663,10 +664,6 @@ function artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap) {
   return meta;
 }
 
-function artDefActual(name, desc, size, iconValue, externalUrl, traitsMap) {
-  return JSON.stringify(artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap)).length
-       + ENGINE_DEF_WRAPPER + ENGINE_DEF_SIGN;   // records are ALWAYS signed now
-}
 
 
 $("g-mint-btn").onclick = function () {
@@ -917,7 +914,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.2.0", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.2.1", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

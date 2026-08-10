@@ -1552,15 +1552,36 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                  * Refuse to create a collection whose lots could never leave
                  * the wallet (joint transfer budget - the "Random" lesson). */
                 if ("embed".equals(createMode)) {
-                    /* ALWAYS SIGNED envelope: shrink over-budget photos into the
-                     * image room the signed record leaves; refuse only what
-                     * cannot shrink (SVG art) or a record past the split cap. */
+                    /* ALWAYS SIGNED envelope, FIT-then-refuse: the real name/
+                     * desc/URLs land here and can outweigh the handoff's
+                     * estimate — re-run the icon ladder (slim -> drop) before
+                     * ever refusing. Only traits/text overweight refuses. */
                     JSONObject metaJ = StateNft.tokenMetadata(m);
                     if (collectionItemTraits != null && collectionItemTraits.length() > 0)
                         put(metaJ, "traits", collectionItemTraits);
                     int room = MintEngine.imageBudget(metaJ.toString().length());
+                    if (room < 0 && !m.icon.isEmpty() && !m.icon.startsWith("http")) {
+                        String slim = ImageTools.recompressBase64(m.icon, 2000);
+                        if (!slim.isEmpty()) {
+                            m.icon = slim;
+                            metaJ = StateNft.tokenMetadata(m);
+                            if (collectionItemTraits != null && collectionItemTraits.length() > 0)
+                                put(metaJ, "traits", collectionItemTraits);
+                            room = MintEngine.imageBudget(metaJ.toString().length());
+                            if (room >= 0) toast("icon slimmed so the collection signs");
+                        }
+                        if (room < 0) {
+                            m.icon = "";
+                            metaJ = StateNft.tokenMetadata(m);
+                            if (collectionItemTraits != null && collectionItemTraits.length() > 0)
+                                put(metaJ, "traits", collectionItemTraits);
+                            room = MintEngine.imageBudget(metaJ.toString().length());
+                            if (room >= 0) toast("icon dropped so the collection signs — wallet shows the identicon");
+                        }
+                    }
                     if (room < 0) {
-                        toast(MintEngine.jointGate(metaJ.toString().length(), 0));
+                        toast(MintEngine.jointGate(metaJ.toString().length(), 0)
+                                + " — even without an icon; trim the description or trait slots");
                         return;
                     }
                     for (int ii = 0; ii < createImages.length; ii++) {

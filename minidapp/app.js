@@ -1301,16 +1301,41 @@ function mintCollection() {
   /* ALWAYS SIGNED: the envelope (record incl. the 8.4KB signature) decides
    * the image budget — over-budget photos are SHRUNK automatically, never
    * refused, never minted unsigned. SVGs cannot be lossy-shrunk: those refuse. */
+  /* FIT-then-refuse: real name/desc/URLs land here and can outweigh any
+   * earlier estimate — run the icon ladder (slim -> drop) before refusing. */
+  function iconLadder(cb) {
+    var env = engineEnvelope(JSON.stringify(
+      artExactMeta(name, desc, size, icon, externalurl, null)).length);
+    if (env.ok) { cb(env); return; }
+    var raw = (icon && icon.indexOf("http") !== 0)
+      ? icon.replace(/<\/artimage>$/, "") : "";
+    if (!raw) { status.innerText = env.error; cb(null); return; }
+    reshrinkB64(raw, 2000, function (slim) {
+      if (slim) {
+        var icon2 = slim + "</artimage>";
+        var e2 = engineEnvelope(JSON.stringify(
+          artExactMeta(name, desc, size, icon2, externalurl, null)).length);
+        if (e2.ok) {
+          icon = icon2;
+          toast("icon slimmed so the collection signs");
+          cb(e2); return;
+        }
+      }
+      icon = "";
+      var e3 = engineEnvelope(JSON.stringify(
+        artExactMeta(name, desc, size, "", externalurl, null)).length);
+      if (e3.ok) {
+        toast("icon dropped so the collection signs — wallet shows the identicon");
+        cb(e3); return;
+      }
+      status.innerText = e3.error + " — even without an icon; shorten the description";
+      cb(null);
+    });
+  }
   function fitted(next2) {
-    if (mode !== "embed") {
-      var ml0 = JSON.stringify(artExactMeta(name, desc, size, icon, externalurl, null)).length;
-      var e0 = engineEnvelope(ml0);
-      if (!e0.ok) { status.innerText = e0.error; return; }
-      next2(); return;
-    }
-    var metaLen = JSON.stringify(artExactMeta(name, desc, size, icon, externalurl, null)).length;
-    var env = engineEnvelope(metaLen);
-    if (!env.ok) { status.innerText = env.error; return; }
+    iconLadder(function (env) {
+      if (!env) { return; }
+      if (mode !== "embed") { next2(); return; }
     var budget = Math.min(IMG_BUDGET, env.imageBudget);
     (function shrinkNext(i) {
       if (i >= size) { next2(); return; }
@@ -1319,13 +1344,16 @@ function mintCollection() {
         if (out === null) {
           status.innerText = "item #" + (i + 1) + " (" + WIZ_IMAGES[i].length +
             "B) cannot be shrunk to the " + budget + "B image budget the signed " +
-            "record leaves — use a raster image or lighten the record";
+            "record leaves" + (b64Mime(WIZ_IMAGES[i]) === "image/svg+xml"
+              ? " — SVG art cannot be lossy-shrunk; lighten the record instead"
+              : " — lighten the record (shorter text, hosted icon)");
           return;
         }
         WIZ_IMAGES[i] = out;
         shrinkNext(i + 1);
       });
     })(0);
+    });
   }
   fitted(function () {
   MDS.cmd("getaddress", function (res) {
@@ -1848,10 +1876,11 @@ $("nft-mint-btn").onclick = function () {
     });
   }
   function post(signPk) {
+    if (!signPk) { status.innerText = "no signing key — mint refused (ALWAYS SIGNED)"; return; }
     var cmd = "tokencreate name:" + JSON.stringify(nftMeta()) +
               " amount:" + editions + " decimals:0";
     if (web) { cmd += " webvalidate:" + web; }
-    if (signPk) { cmd += " signtoken:" + signPk; }
+    cmd += " signtoken:" + signPk;
     MDS.cmd(cmd, function (res) {
       if (!res.status) {
         status.innerText = "mint failed: " + (res.error || "node refused");
