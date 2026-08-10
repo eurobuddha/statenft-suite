@@ -662,8 +662,20 @@ function engineWatchStall(row, tip, done) {
 }
 
 function enginePhaseStamp(row, tip, done) {
+  /* Reserved-but-unconfirmed indices are USED: without this a fresh chain
+   * view re-issues an index that is already sealed in flight. */
+  MDS.sql("SELECT idx FROM items WHERE collectionid=" + row.ID +
+          " AND coinid IS NOT NULL AND coinid<>''", function (rsv) {
+    var reserved = {};
+    var rr = (rsv && rsv.rows) ? rsv.rows : [];
+    for (var q = 0; q < rr.length; q++) { reserved["" + rr[q].IDX] = true; }
+    enginePhaseStampCoins(row, tip, reserved, done);
+  });
+}
+
+function enginePhaseStampCoins(row, tip, reserved, done) {
   engineTokenCoins(row.TOKENID, function (coins) {
-    var used = {};
+    var used = reserved || {};
     var blanks = [];
     var stamped = [];
     var bigs = 0;
@@ -730,6 +742,14 @@ function enginePhaseStamp(row, tip, done) {
           }
           steps.push("txnsign id:" + id + " publickey:auto");
           engineMarkPending(c.coinid, tip);
+          /* Reserve the index DURABLY before posting: the coinid lands on the
+           * item row now, not when the chain confirms. A round that began with
+           * a stale chain view used to re-issue the same index to a fresh coin
+           * (duplicate seals, 2026-08-10); under the locked contract a
+           * duplicate is permanent. */
+          MDS.sql("UPDATE items SET coinid='" + engineSqlEsc(c.coinid) +
+                  "' WHERE collectionid=" + row.ID + " AND idx=" + idx +
+                  " AND (coinid IS NULL OR coinid='')", function () {});
           enginePostTxn(id, steps, next,
             function (e) { engineSetError(row, e, next); });
         });

@@ -218,9 +218,9 @@ public final class MintEngine {
             for (int i = 0; i < coins.length(); i++) {
                 JSONObject c = coins.optJSONObject(i);
                 if (c == null) continue;
-                int amt = parseInt(c.optString("tokenamount", "0"));
-                if (amt == 1) units++;
-                else if (amt > 1) bigs.add(c);
+                double amt = amountOf(c);
+                if (amt >= 0.9999 && amt <= 1.0001) units++;
+                else if (amt > 1.0001) bigs.add(c);
             }
             if (units >= row.optInt("size") && bigs.isEmpty()) { setPhase(ctx, row, "STAMP", done); return; }
             if (bigs.isEmpty()) { done.done("Waiting for split coins"); return; }
@@ -400,11 +400,23 @@ public final class MintEngine {
                 JSONObject c = coins.optJSONObject(i);
                 if (c == null) continue;
                 String idx = StateNft.stamped(c);
-                if (idx != null) { used.add(idx); stampedN++; }
-                else if ("1".equals(c.optString("tokenamount"))) blankN++;
-                else if (parseInt(c.optString("tokenamount", "0")) > 1) bigN++;
+                if (idx != null && idx.matches("^[0-9]+$")) { used.add(idx); stampedN++; continue; }
+                double amt = amountOf(c);
+                if (amt >= 0.9999 && amt <= 1.0001) blankN++;
+                else if (amt > 1.0001) bigN++;
             }
             mergeLocalStamps(row, used);
+            // one-line forensic dump so a stalled mint can be diagnosed from
+            // the Engine Log alone (amount|port-0 value per coin)
+            StringBuilder dump = new StringBuilder();
+            for (int i = 0; i < coins.length() && i < 24; i++) {
+                JSONObject c = coins.optJSONObject(i);
+                if (c == null) continue;
+                dump.append(i == 0 ? "" : " ")
+                    .append(c.optString("tokenamount", "?")).append("|")
+                    .append(String.valueOf(StateNft.state(c, 0)));
+            }
+            LocalStore.logEvent(ctx, row.optString("name") + ": COINS " + dump);
             String phase;
             if (used.size() >= row.optInt("size")) phase = "DONE";
             else if (bigN > 0) phase = "SPLIT";
@@ -427,6 +439,15 @@ public final class MintEngine {
         sWalletCoinsAt = 0;
     }
 
+    /** Coin amount as a NUMBER. tokenamount arrives as a decimal string whose
+     *  exact form varies by node build ("1", "1.0", "1.000000…"); string
+     *  equality against "1" silently lost coins from the mint machine. */
+    static double amountOf(JSONObject coin) {
+        if (coin == null) return 0;
+        try { return Double.parseDouble(coin.optString("tokenamount", "0").trim()); }
+        catch (Exception e) { return 0; }
+    }
+
     private static void phaseStamp(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
         tokenCoins(node, row.optString("tokenid"), coins -> {
             HashSet<String> used = new HashSet<>();
@@ -436,9 +457,16 @@ public final class MintEngine {
                 JSONObject c = coins.optJSONObject(i);
                 if (c == null) continue;
                 String idx = StateNft.stamped(c);
-                if (idx != null) used.add(idx);
-                else if ("1".equals(c.optString("tokenamount"))) blanks.add(c);
-                else if (parseInt(c.optString("tokenamount", "0")) > 1) bigs.add(c);
+                // Only a DIGIT index is a real seal: anything else (a legacy
+                // or malformed port-0 value) must not silently consume a coin
+                if (idx != null && idx.matches("^[0-9]+$")) { used.add(idx); continue; }
+                // Classify by VALUE, not string equality: node builds have
+                // reported "1", "1.0" and "1.000..." for the same unit coin,
+                // and a coin matching none of the branches vanished from the
+                // machine entirely — the 2026-08-10 stamping deadlock.
+                double amt = amountOf(c);
+                if (amt >= 0.9999 && amt <= 1.0001) blanks.add(c);
+                else if (amt > 1.0001) bigs.add(c);
             }
             updateCoinIds(row, coins);
             // A depth-limited window can hide old stamps: merge the locally
@@ -517,6 +545,14 @@ public final class MintEngine {
             return;
         }
         LocalStore.setPending(ctx, coinid, tip);
+        /* Reserve the index BEFORE posting. The old code only recorded an
+         * index once the chain showed the stamp confirmed, so any round that
+         * started with a stale/empty chain view handed the SAME index to a
+         * fresh coin — the duplicate seals found on 2026-08-10 (index 1 on
+         * four coins). mergeLocalStamps() reads these reservations, so an
+         * index can never be issued twice, confirmed or not. Under the locked
+         * contract a duplicate seal is permanent, so this must hold. */
+        reserveIndex(ctx, row, idx, coinid);
         String id = "st" + row.optLong("id") + "x" + idx;
         List<String> steps = new ArrayList<>();
         steps.add("txninput id:" + id + " coinid:" + coinid);
@@ -866,6 +902,25 @@ public final class MintEngine {
     static JSONArray localItems(JSONObject row) {
         JSONArray items = row.optJSONArray("items");
         return items == null ? new JSONArray() : items;
+    }
+
+    /** Durably claim item #idx for this coin (pre-post reservation). */
+    private static void reserveIndex(Context ctx, JSONObject row, int idx, String coinid) {
+        JSONArray items = localItems(row);
+        for (int j = 0; j < items.length(); j++) {
+            JSONObject it = items.optJSONObject(j);
+            if (it != null && it.optInt("idx") == idx) {
+                if (it.optString("coinid", "").isEmpty()) put(it, "coinid", coinid);
+                LocalStore.upsert(ctx, row);
+                return;
+            }
+        }
+        JSONObject it = new JSONObject();
+        put(it, "idx", idx);
+        put(it, "coinid", coinid);
+        items.put(it);
+        put(row, "items", items);
+        LocalStore.upsert(ctx, row);
     }
 
     private static void updateCoinIds(JSONObject row, JSONArray coins) {

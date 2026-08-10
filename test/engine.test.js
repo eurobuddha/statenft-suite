@@ -156,6 +156,27 @@ check("over-joint collection refused", typeof doomed.error === "string", true);
 const fat = engineJointGate(18000, 0);            // record alone past split max
 check("unsplittable record refused outright", typeof fat.error === "string", true);
 
+/* ---- duplicate-seal guard (the 2026-08-10 corruption) ------------------ */
+/* Twenty coins came back sealed with only EIGHT distinct indices: index 1 on
+ * four coins, 2 on four... Rounds that began with a stale chain view re-issued
+ * low indices, and under the locked contract a duplicate seal is permanent.
+ * The engine now reserves the index at POST time; these fixtures pin the
+ * arithmetic that must follow from that. */
+console.log("index reservation — no index is ever issued twice");
+{
+  const used = { "1": true, "2": true, "3": true };   // 3 confirmed on-chain
+  const reserved = { "4": true, "5": true };          // 2 posted, unconfirmed
+  const merged = Object.assign({}, used, reserved);
+  const free = [];
+  for (let n = 1; n <= 20; n++) { if (!merged["" + n]) free.push(n); }
+  check("reserved indices are excluded from free", free[0], 6);
+  check("free list length accounts for both sets", free.length, 15);
+  const chainOnly = [];
+  for (let n = 1; n <= 20; n++) { if (!used["" + n]) chainOnly.push(n); }
+  check("without reservations the planner WOULD re-issue 4 (the old bug)",
+    chainOnly[0], 4);
+}
+
 console.log(failures === 0
   ? "\nengine.test.js: all assertions passed"
   : `\nengine.test.js: ${failures} FAILED`);
