@@ -274,6 +274,8 @@ function collectionCard(row) {
     badge = "<span class='badge badge-live'>&#8224; burying&hellip;</span>";
   } else if (phase === "NEEDIMAGES") {
     badge = "<span class='badge badge-err'>✕ needs images</span>";
+  } else if (phase === "DAMAGED") {
+    badge = "<span class='badge badge-err'>✕ duplicate seals</span>";
   } else if (row.ERROR) {
     badge = "<span class='badge badge-err'>✕ error</span>";
   } else {
@@ -347,6 +349,7 @@ function setCover(coverEl, row) {
 }
 
 function openOwn(row) {
+  SELF_HEALED = false;
   OPEN_ROW = row;
   TOKENID = row.TOKENID || "";
   META = { name: row.NAME, description: row.DESCRIPTION, mode: row.MODE,
@@ -360,6 +363,7 @@ function openExternal(tid) {
   if (tid.indexOf("0x") !== 0) { toast("tokenid must start 0x"); return; }
   MDS.cmd("tokens tokenid:" + tid, function (res) {
     if (!res.status) { toast("token not found on this node"); return; }
+    SELF_HEALED = false;
     OPEN_ROW = null;
     TOKENID = tid;
     var t = res.response;
@@ -570,7 +574,8 @@ function renderProgress() {
   if (!OPEN_ROW || OPEN_ROW.PHASE === "DONE") { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
 
-  var at = RAIL_ORDER.indexOf(OPEN_ROW.PHASE);
+  // DAMAGED parks the rail at the stamp step: the error line carries the story
+  var at = RAIL_ORDER.indexOf(OPEN_ROW.PHASE === "DAMAGED" ? "STAMP" : OPEN_ROW.PHASE);
   $("rail-fill").style.width = (at / (RAIL_ORDER.length - 1) * 100) + "%";
   var nodes = box.querySelectorAll(".rail-node");
   for (var i = 0; i < nodes.length; i++) {
@@ -615,6 +620,24 @@ function renderGallery() {
   });
 }
 
+/* A row marked DONE while the chain still shows unsealed lots is the
+ * false-DONE of 2026-08-10 (reserved-but-dropped stamps counted as seals):
+ * re-point the engine at the chain and let it finish. Once per visit. */
+var SELF_HEALED = false;
+
+function maybeSelfHeal(distinct, size) {
+  if (SELF_HEALED || !OPEN_ROW || size <= 0 || distinct >= size) { return; }
+  if (OPEN_ROW.PHASE !== "DONE" || parseInt(OPEN_ROW.ISCREATOR, 10) !== 1) { return; }
+  SELF_HEALED = true;
+  MDS.log("collection " + OPEN_ROW.ID + ": marked DONE but chain shows " +
+          distinct + "/" + size + " sealed - self-recovering");
+  toast("Chain shows " + distinct + " / " + size + " sealed — resuming this mint");
+  MDS.cmd("block", function (bres) {
+    var tip = bres.status ? parseInt(bres.response.block, 10) : 0;
+    engineRecover(OPEN_ROW, tip, function () { refreshDetail(); });
+  });
+}
+
 function itemStatus(coin, mineIds) {
   if (!coin) { return "unseen"; }
   if (coin.address === GRAVEYARD) { return "entombed"; }
@@ -631,6 +654,7 @@ function renderCards(coins, mineIds) {
   });
   var size = META.size || Object.keys(byIdx).length;
   LAST = { byIdx: byIdx, mineIds: mineIds, size: size, rawMine: rawMine };
+  maybeSelfHeal(Object.keys(byIdx).length, size);
 
   // holdings distribution (entombed counts with held for the bar)
   var counts = { mine: 0, held: 0, unseen: 0, entombed: 0 };
@@ -647,7 +671,8 @@ function renderCards(coins, mineIds) {
   /* Recover is offered while a mint of ours is still unfinished */
   $("recover-btn").classList.toggle("hidden",
     !(OPEN_ROW && parseInt(OPEN_ROW.ISCREATOR, 10) === 1 && OPEN_ROW.PHASE &&
-      OPEN_ROW.PHASE !== "DONE" && OPEN_ROW.PHASE !== "BURIED"));
+      OPEN_ROW.PHASE !== "DONE" && OPEN_ROW.PHASE !== "BURIED" &&
+      OPEN_ROW.PHASE !== "DAMAGED"));
   $("sendall-btn").classList.toggle("hidden", !(rawMine > 0));
   $("remove-btn").classList.toggle("hidden", rawMine > 0);
   $("holdings").classList.remove("hidden");

@@ -132,9 +132,12 @@ function engineInitTables(cb) {
         " `image` clob," +                     // base64 (embed) or URL (url mode)
         " `coinid` varchar(80))",
         function () {
-          engineEach(ENGINE_MIGRATIONS, function (col, next) {
-            MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " + col, next);
-          }, function () { engineBackfillCreator(cb); });
+          MDS.sql("ALTER TABLE items ADD COLUMN IF NOT EXISTS reservedat int DEFAULT -1",
+            function () {
+              engineEach(ENGINE_MIGRATIONS, function (col, next) {
+                MDS.sql("ALTER TABLE collections ADD COLUMN IF NOT EXISTS " + col, next);
+              }, function () { engineBackfillCreator(cb); });
+            });
         });
     });
 }
@@ -354,6 +357,38 @@ function engineSetError(row, err, cb) {
   MDS.log("StateNFT: collection " + row.ID + " ERROR " + err);
   MDS.sql("UPDATE collections SET error='" + engineSqlEsc(err) + "' " +
           "WHERE id=" + row.ID, function () { if (cb) { cb(); } });
+}
+
+/* Chain-truth verdict for the stamp machinery. `distinct` counts indices
+ * CONFIRMED on-chain only — reservations are hopes, not facts: counting them
+ * toward DONE marked a collection finished at 14/20 real seals while six
+ * reserved stamp txns had died in a rewind (2026-08-10). */
+function engineStampClassify(distinct, size, blanks, bigs, coins) {
+  if (distinct >= size) { return "DONE"; }
+  if (coins === 0) { return "MOVE"; }
+  if (blanks === 0 && bigs === 0 && coins >= size) { return "DAMAGED"; }
+  if (blanks === 0 && bigs > 0) { return "SPLIT"; }
+  return "STAMP";
+}
+
+/* Terminal honest state for pre-reservation duplicate seals: every coin is
+ * stamped but distinct designs fall short — under the locked contract a
+ * duplicate seal is permanent, so the collection can never complete. The
+ * lots stay valid, sendable and buriable; the engine stops churning. */
+function engineSetDamaged(row, distinct, coinsN, done) {
+  var msg = "DAMAGED: all " + coinsN + " coins are sealed but only " + distinct +
+    " of " + row.SIZE + " designs are distinct - " + (coinsN - distinct) +
+    " coins carry duplicate seals (minted before the duplicate-seal fix), " +
+    "which the locked contract makes permanent. The sealed lots remain valid, " +
+    "sendable and buriable; the collection can never reach " + row.SIZE +
+    " distinct lots.";
+  MDS.log("collection " + row.ID + ": " + msg);
+  MDS.sql("UPDATE collections SET phase='DAMAGED', error='" + engineSqlEsc(msg) +
+          "' WHERE id=" + row.ID, function () {
+    row.PHASE = "DAMAGED";
+    row.ERROR = msg;
+    if (done) { done(msg); }
+  });
 }
 
 /* ---- phase handlers ------------------------------------------------------ */
@@ -637,13 +672,19 @@ function engineRecover(row, tip, done) {
     }
     var count = 0;
     for (var u in used) { if (used.hasOwnProperty(u)) { count++; } }
-    var phase = count >= row.SIZE ? "DONE"
-              : bigN > 0 ? "SPLIT"
-              : blankN > 0 ? "STAMP"
-              : coins.length === 0 ? "MOVE" : "STAMP";
+    // chain-confirmed distinct seals ONLY — reservations never count (the
+    // 14/20 false-DONE, 2026-08-10)
+    var phase = engineStampClassify(count, row.SIZE, blankN, bigN, coins.length);
     MDS.log("collection " + row.ID + ": RECOVER - chain shows " + coins.length +
-            " coins (" + stampedN + " sealed, " + blankN + " blank, " + bigN +
-            " unsplit) -> " + phase);
+            " coins (" + count + " distinct of " + stampedN + " sealed, " +
+            blankN + " blank, " + bigN + " unsplit) -> " + phase);
+    if (phase === "DAMAGED") {
+      MDS.sql("UPDATE collections SET splitretries=0, splitunits=-1 " +
+              "WHERE id=" + row.ID, function () {
+        engineSetDamaged(row, count, coins.length, done);
+      });
+      return;
+    }
     MDS.sql("UPDATE collections SET error='', splitretries=0, splitunits=-1 " +
             "WHERE id=" + row.ID, function () {
       engineSetPhase(row, phase, done);
@@ -675,27 +716,42 @@ function engineWatchStall(row, tip, done) {
   return true;
 }
 
+/* Re-post window for a reservation whose coin still sits blank: from here the
+ * ONLY duplicate-proof cure is re-posting the SAME index onto the SAME coin —
+ * a resurfacing original can then only double-spend that one coin, so the
+ * chain keeps exactly one seal. Moving the index to a different blank would
+ * let both confirm: a permanent duplicate under the locked contract. */
+var ENGINE_RESERVE_TTL = 12;
+/* A reservation whose coin vanished entirely with its index unconfirmed can
+ * only be freed after a far deeper wait — the txn that consumed the coin may
+ * still surface its stamp. */
+var ENGINE_VANISHED_TTL = 60;
+
 function enginePhaseStamp(row, tip, done) {
   /* Reserved-but-unconfirmed indices are USED: without this a fresh chain
    * view re-issues an index that is already sealed in flight. */
-  MDS.sql("SELECT idx FROM items WHERE collectionid=" + row.ID +
+  MDS.sql("SELECT idx, coinid, reservedat FROM items WHERE collectionid=" + row.ID +
           " AND coinid IS NOT NULL AND coinid<>''", function (rsv) {
-    var reserved = {};
     var rr = (rsv && rsv.rows) ? rsv.rows : [];
-    for (var q = 0; q < rr.length; q++) { reserved["" + rr[q].IDX] = true; }
-    enginePhaseStampCoins(row, tip, reserved, done);
+    var resList = [];
+    for (var q = 0; q < rr.length; q++) {
+      resList.push({ idx: parseInt(rr[q].IDX, 10), coinid: rr[q].COINID,
+                     at: (rr[q].RESERVEDAT === undefined || rr[q].RESERVEDAT === null)
+                         ? -1 : parseInt(rr[q].RESERVEDAT, 10) });
+    }
+    enginePhaseStampCoins(row, tip, resList, done);
   });
 }
 
-function enginePhaseStampCoins(row, tip, reserved, done) {
+function enginePhaseStampCoins(row, tip, resList, done) {
   engineTokenCoins(row.TOKENID, function (coins) {
-    var used = reserved || {};
+    var chainUsed = {};
     var blanks = [];
     var stamped = [];
     var bigs = 0;
     for (var i = 0; i < coins.length; i++) {
       var idx = engineStamped(coins[i]);
-      if (idx !== null) { used[idx] = true; stamped.push(coins[i]); }
+      if (idx !== null) { chainUsed[idx] = true; stamped.push(coins[i]); }
       else if (coins[i].tokenamount === "1") { blanks.push(coins[i]); }
       else if (parseInt(coins[i].tokenamount, 10) > 1) { bigs++; }
     }
@@ -708,66 +764,125 @@ function enginePhaseStampCoins(row, tip, reserved, done) {
       MDS.sql("UPDATE items SET coinid='" + engineSqlEsc(c.coinid) +
               "' WHERE collectionid=" + row.ID + " AND idx=" + idx, next);
     }, function () {
-      var count = 0;
-      for (var u in used) { if (used.hasOwnProperty(u)) { count++; } }
-      if (count >= row.SIZE) { engineSetPhase(row, "DONE", done); return; }
+      // DONE takes CHAIN-CONFIRMED seals only — never reservations.
+      var distinct = 0;
+      for (var u in chainUsed) { if (chainUsed.hasOwnProperty(u)) { distinct++; } }
+      var verdict = engineStampClassify(distinct, row.SIZE, blanks.length, bigs, coins.length);
+      if (verdict === "DONE") { engineSetPhase(row, "DONE", done); return; }
+      if (verdict === "DAMAGED") { engineSetDamaged(row, distinct, coins.length, done); return; }
       // The 'Waiting for blank unit coins' deadlock (2026-08-10): dropped
       // split txns can rewind the chain AFTER the phase advanced on their
       // unconfirmed outputs, leaving unsealed units inside a fat change coin
       // STAMP never looks at. Chain truth wins: go back and finish splitting.
-      if (blanks.length === 0 && bigs > 0) {
+      if (verdict === "SPLIT") {
         MDS.log("collection " + row.ID +
                 ": unsplit units found in STAMP - returning to SPLIT");
         engineSetPhase(row, "SPLIT", done);
         return;
       }
 
-      // next free indices
-      var free = [];
-      for (var n = 1; n <= row.SIZE; n++) {
-        if (!used["" + n]) { free.push(n); }
+      // Reservation triage. Dead-but-coin-blank -> re-post the SAME pair
+      // after ENGINE_RESERVE_TTL; coin vanished entirely -> release only
+      // after ENGINE_VANISHED_TTL; anything else keeps waiting. Reservations
+      // without a recorded tip (pre-4.2.3 rows) start their clock now.
+      var blankIds = {};
+      for (var b = 0; b < blanks.length; b++) { blankIds[blanks[b].coinid] = true; }
+      var allIds = {};
+      for (var a = 0; a < coins.length; a++) { allIds[coins[a].coinid] = true; }
+      var used = {};            // chain-confirmed OR still-reserved -> not free
+      for (var u2 in chainUsed) { if (chainUsed.hasOwnProperty(u2)) { used[u2] = true; } }
+      var replans = [];
+      var fixes = [];
+      for (var r = 0; r < resList.length; r++) {
+        var rv = resList[r];
+        if (chainUsed["" + rv.idx]) { continue; }
+        used["" + rv.idx] = true;
+        if (blankIds[rv.coinid]) {
+          if (rv.at < 0) {
+            fixes.push("UPDATE items SET reservedat=" + tip +
+                       " WHERE collectionid=" + row.ID + " AND idx=" + rv.idx);
+          } else if (tip - rv.at >= ENGINE_RESERVE_TTL) {
+            MDS.log("collection " + row.ID + ": re-posting idx " + rv.idx +
+                    " onto its reserved coin - still blank " + (tip - rv.at) +
+                    " blocks after the stamp was posted");
+            replans.push({ coinid: rv.coinid, idx: rv.idx });
+          }
+        } else if (!allIds[rv.coinid]) {
+          if (rv.at < 0) {
+            fixes.push("UPDATE items SET reservedat=" + tip +
+                       " WHERE collectionid=" + row.ID + " AND idx=" + rv.idx);
+          } else if (tip - rv.at >= ENGINE_VANISHED_TTL) {
+            MDS.log("collection " + row.ID + ": released idx " + rv.idx +
+                    " - reserved coin gone " + (tip - rv.at) +
+                    " blocks with no seal in sight");
+            delete used["" + rv.idx];
+            fixes.push("UPDATE items SET coinid='', reservedat=-1 " +
+                       "WHERE collectionid=" + row.ID + " AND idx=" + rv.idx);
+          }
+        }
       }
-      engineEach(blanks, function (c, next) {
-        if (free.length === 0) { next(); return; }
-        if (!enginePendingOk(c.coinid, tip)) { next(); return; }
-        var idx = free.shift();
-        MDS.sql("SELECT image FROM items WHERE collectionid=" + row.ID +
-                " AND idx=" + idx, function (res) {
-          var img = (res.rows && res.rows.length) ? res.rows[0].IMAGE : "";
-          if (row.MODE === "embed" && !img) {
-            // Stamping is irreversible under a locked edition: an item stamped
-            // without its image would be permanently imageless. Stop this tick
-            // and surface the gap once (free is recomputed from the chain on
-            // the next tick, so nothing is lost by clearing it here).
-            free.length = 0;
-            engineSetError(row, "missing image for item #" + idx +
-              " - re-supply it to finish this mint", next);
-            return;
-          }
-          var id = "st" + row.ID + "x" + idx;
-          var steps = [
-            "txninput id:" + id + " coinid:" + c.coinid,
-            "txnoutput id:" + id + " amount:1 address:" + row.CREATORADDR +
-              " tokenid:" + row.TOKENID + " storestate:true",
-            "txnstate id:" + id + " port:0 value:" + idx
-          ];
-          if (row.MODE === "embed" && img) {
-            steps.push("txnstate id:" + id + " port:1 value:[" + img + "]");
-          }
-          steps.push("txnsign id:" + id + " publickey:auto");
-          engineMarkPending(c.coinid, tip);
-          /* Reserve the index DURABLY before posting: the coinid lands on the
-           * item row now, not when the chain confirms. A round that began with
-           * a stale chain view used to re-issue the same index to a fresh coin
-           * (duplicate seals, 2026-08-10); under the locked contract a
-           * duplicate is permanent. */
-          MDS.sql("UPDATE items SET coinid='" + engineSqlEsc(c.coinid) +
-                  "' WHERE collectionid=" + row.ID + " AND idx=" + idx +
-                  " AND (coinid IS NULL OR coinid='')", function () {});
-          enginePostTxn(id, steps, next,
-            function (e) { engineSetError(row, e, next); });
-        });
-      }, done);
+
+      engineEach(fixes, function (q, next) { MDS.sql(q, next); }, function () {
+        // job list: duplicate-proof re-posts first, then fresh assignments of
+        // the lowest free indices onto unreserved ready blanks
+        var free = [];
+        for (var n = 1; n <= row.SIZE; n++) {
+          if (!used["" + n]) { free.push(n); }
+        }
+        var replanned = {};
+        for (var p = 0; p < replans.length; p++) { replanned[replans[p].coinid] = true; }
+        var jobs = replans.slice();
+        for (var b2 = 0; b2 < blanks.length; b2++) {
+          var c2 = blanks[b2];
+          if (replanned[c2.coinid]) { continue; }
+          if (!enginePendingOk(c2.coinid, tip)) { continue; }
+          if (free.length === 0) { break; }
+          jobs.push({ coinid: c2.coinid, idx: free.shift() });
+        }
+        var halted = false;
+        engineEach(jobs, function (job, next) {
+          if (halted) { next(); return; }
+          MDS.sql("SELECT image FROM items WHERE collectionid=" + row.ID +
+                  " AND idx=" + job.idx, function (res) {
+            var img = (res.rows && res.rows.length) ? res.rows[0].IMAGE : "";
+            if (row.MODE === "embed" && !img) {
+              // Stamping is irreversible under a locked edition: an item
+              // stamped without its image would be permanently imageless.
+              // Stop this tick and surface the gap once (jobs are recomputed
+              // from the chain next tick, so nothing is lost).
+              halted = true;
+              engineSetError(row, "missing image for item #" + job.idx +
+                " - re-supply it to finish this mint", next);
+              return;
+            }
+            var id = "st" + row.ID + "x" + job.idx;
+            var steps = [
+              "txninput id:" + id + " coinid:" + job.coinid,
+              "txnoutput id:" + id + " amount:1 address:" + row.CREATORADDR +
+                " tokenid:" + row.TOKENID + " storestate:true",
+              "txnstate id:" + id + " port:0 value:" + job.idx
+            ];
+            if (row.MODE === "embed" && img) {
+              steps.push("txnstate id:" + id + " port:1 value:[" + img + "]");
+            }
+            steps.push("txnsign id:" + id + " publickey:auto");
+            engineMarkPending(job.coinid, tip);
+            /* Reserve the index DURABLY before posting: the coinid lands on
+             * the item row now, not when the chain confirms. A round that
+             * began with a stale chain view used to re-issue the same index
+             * to a fresh coin (duplicate seals, 2026-08-10); under the locked
+             * contract a duplicate is permanent. Re-posts of the same pair
+             * refresh the TTL clock so the next re-post waits a full window. */
+            MDS.sql("UPDATE items SET coinid='" + engineSqlEsc(job.coinid) +
+                    "', reservedat=" + tip +
+                    " WHERE collectionid=" + row.ID + " AND idx=" + job.idx +
+                    " AND (coinid IS NULL OR coinid='' OR coinid='" +
+                    engineSqlEsc(job.coinid) + "')", function () {});
+            enginePostTxn(id, steps, next,
+              function (e) { engineSetError(row, e, next); });
+          });
+        }, done);
+      });
     });
   }, function (e) { engineSetError(row, e, done); });
 }
@@ -869,7 +984,8 @@ function engineTick(cb) {
       engineBoundTokenids = {};
       var brows = bres2.rows || [];
       for (var b = 0; b < brows.length; b++) { engineBoundTokenids[brows[b].TOKENID] = true; }
-      MDS.sql("SELECT * FROM collections WHERE phase<>'DONE' AND phase<>'BURIED'",
+      MDS.sql("SELECT * FROM collections WHERE phase<>'DONE' AND phase<>'BURIED' " +
+              "AND phase<>'DAMAGED'",
         function (res) {
           var rows = (res.rows || []);
           engineEach(rows, function (row, next) {

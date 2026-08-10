@@ -19,7 +19,7 @@ const SRC = path.join(__dirname, "..", "minidapp", "engine.js");
 const sandbox = { MDS: { cmd() {}, sql() {}, log() {} } };
 vm.runInNewContext(fs.readFileSync(SRC, "utf8"), sandbox, { filename: SRC });
 const { engineSafeStateValue, engineStamped, engineScript, engineScriptLegacy,
-        engineSqlEsc, GRAVEYARD } = sandbox;
+        engineSqlEsc, engineStampClassify, GRAVEYARD } = sandbox;
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -187,6 +187,26 @@ console.log("index reservation — no index is ever issued twice");
   check("without reservations the planner WOULD re-issue 4 (the old bug)",
     chainOnly[0], 4);
 }
+
+/* ---- chain-truth stamp verdicts (the 2026-08-10 false-DONE) ------------ */
+/* DONE must count CHAIN-CONFIRMED seals only: counting reservations marked a
+ * collection DONE at 14/20 real seals while six reserved stamp txns had died
+ * in a rewind — six blanks waited with every recovery control hidden. And a
+ * fully-stamped set with distinct short of size is permanent duplicate-seal
+ * damage, not something to flip-flop STAMP<->RECOVER over. */
+console.log("engineStampClassify — chain truth decides the phase");
+// engineStampClassify(distinctOnChain, size, blanks, bigs, coins)
+check("all distinct confirmed -> DONE", engineStampClassify(20, 20, 0, 0, 20), "DONE");
+check("14/20 with 6 blanks is NOT done (the Maths stall)",
+  engineStampClassify(14, 20, 6, 0, 20), "STAMP");
+check("duplicate seals classify DAMAGED (math 9/20)",
+  engineStampClassify(9, 20, 0, 0, 20), "DAMAGED");
+check("duplicate seals classify DAMAGED (abstract 8/20)",
+  engineStampClassify(8, 20, 0, 0, 20), "DAMAGED");
+check("a partial coin window is NOT damage", engineStampClassify(9, 20, 0, 0, 12), "STAMP");
+check("blanks present -> still workable", engineStampClassify(9, 20, 1, 0, 20), "STAMP");
+check("unsplit coins -> back to SPLIT", engineStampClassify(9, 20, 0, 2, 20), "SPLIT");
+check("no coins at all -> MOVE", engineStampClassify(0, 20, 0, 0, 0), "MOVE");
 
 console.log(failures === 0
   ? "\nengine.test.js: all assertions passed"
