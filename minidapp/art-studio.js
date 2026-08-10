@@ -139,7 +139,7 @@ function artAiCartoonize(cv512, cb) {
  * that fits wins. 7600 b64 chars of paint keeps the whole Painted plate
  * (~10.9K b64 in coin state) inside the 23000 joint transfer budget beside
  * an unsigned ~12K record — the 'Math' lesson, enforced by the engine. */
-var ART_PAINT_BUDGET = 10200;
+var ART_PAINT_BUDGET = 8600;  // painted plate ≈9.3K b64 — fits the PROVEN 19500 pair budget beside a light record
 function artPaintB64(cv) {
   /* the floor rungs are the guarantee: paprika paintings measured 8.3-9.2K
    * at 208q50 — a ladder that can come back empty silently kills every
@@ -400,7 +400,29 @@ function artCard(item, titlePrefix) {
   return card;
 }
 
+/* the photo pack's trace ladder walks to a raw-byte valve; feed it the
+ * envelope's image room so previews and mints generate ALREADY-fitting
+ * plates (b64 = ceil(raw/3)*4, so raw ≈ room*3/4) */
+function artSetPhotoValve() {
+  if (ART_STUDIO.style !== "photo") { return; }
+  var iconEst = new Array(2001).join("A") + "</artimage>";
+  var seal = {};
+  for (var i = 1; i <= artMintSize(); i++) {
+    seal["" + i] = [{ trait_type: "palette", value: "est" },
+                    { trait_type: "finish", value: "est" },
+                    { trait_type: "render", value: "est" },
+                    { trait_type: "mode", value: "est" }];
+  }
+  var metaLen = JSON.stringify(artExactMeta(
+    $("g-name").value.trim() || "collection", $("g-desc").value.trim(),
+    artMintSize(), iconEst, $("g-externalurl").value.trim(), seal)).length;
+  var env = engineEnvelope(metaLen);
+  var room = env.ok ? env.imageBudget : 4000;
+  ART_PHOTO_MAXRAW = Math.max(1800, Math.floor((room - 8) * 3 / 4));
+}
+
 function artRenderPreview() {
+  artSetPhotoValve();
   var n = artPreviewCount();
   $("art-pv-n").value = n;
   var col = artCollection(ART_SEED, n, ART_CFG);
@@ -498,11 +520,29 @@ function artRenderBudget(reuseCol) {
   if (col.error) {
     budget.innerHTML = "<b class='over'></b>";
     budget.children[0].innerText = col.error;
+    return col;
+  }
+  /* the live SIGNED meter: envelope computed exactly as the mint will —
+   * signature always aboard, icon estimated at its 2000-char slim size */
+  var traitsMap = artTraitsMapFor(col);
+  var iconEst = new Array(2001).join("A") + "</artimage>";
+  var metaLen = JSON.stringify(artExactMeta(
+    $("g-name").value.trim() || "collection", $("g-desc").value.trim(),
+    col.items.length, iconEst, $("g-externalurl").value.trim(), traitsMap)).length;
+  var env = engineEnvelope(metaLen);
+  if (env.ok && maxB <= env.imageBudget) {
+    budget.innerHTML = "<b class='fit'>will mint SIGNED \u2713</b> \u00b7 seed <b class='fit'></b>" +
+      " \u00b7 largest item <b class='fit'>" + maxB + "B</b> of " +
+      Math.min(ART_EMBED_BUDGET, env.imageBudget) + "B image room";
+    budget.children[1].innerText = ART_SEED;
   } else {
-    budget.innerHTML = "seed <b class='fit'></b> · largest item on-chain: <b class='" +
-      (over ? "over" : "fit") + "'>" + maxB + "B</b> of " + ART_EMBED_BUDGET +
-      "B budget" + (over ? " — " + over + " item(s) over" : "");
-    budget.children[0].innerText = ART_SEED;
+    var maxN = artMaxSignedItems(col, 2000,
+      $("g-name").value.trim() || "collection", $("g-desc").value.trim(),
+      $("g-externalurl").value.trim());
+    budget.innerHTML = "<b class='over'>won't sign at " + col.items.length +
+      " items</b> \u2014 " + (maxN > 0
+        ? "this pack + traits signs at up to <b class='fit'>" + maxN + "</b> items"
+        : "traits too heavy even alone \u2014 disable trait slots or use a lighter pack");
   }
   return col;
 }
@@ -568,9 +608,45 @@ function artSealedTraits(styleKey, traits) {
   return out;
 }
 
-var ART_TRANSFER_PAIR_BUDGET = 23000;
-var ART_DEF_WRAPPER = 533;
-var ART_DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
+/* ALWAYS SIGNED, ALWAYS FITS: engine.js's engineEnvelope() is the ONE size
+ * authority (record = meta + wrapper + signature; images fit what remains).
+ * The studio computes the envelope FIRST and shrinks content into it — the
+ * engine gate downstream is a backstop that must never fire. */
+
+/* the largest b64 a pack can emit per item: swept SVG packs are test-bound
+ * at 8192 raw (~7.3K b64 worst); the photo pack's trace valve is 8200 raw
+ * (~10.9K b64) and its paint plates ride the same ceiling */
+function artItemCeiling() {
+  return ART_STUDIO.style === "photo" ? 10900 : 7300;
+}
+
+/* how many items can this config sign? traits scale with item count, and
+ * metadata must leave both split room and image room for the pack ceiling */
+function artMaxSignedItems(col, iconLen, name, desc, externalUrl) {
+  var traitsMap = artTraitsMapFor(col);
+  var traitsLen = JSON.stringify(traitsMap).length;
+  var perItem = col.items.length ? Math.ceil(traitsLen / col.items.length) : 0;
+  var iconVal = iconLen > 0 ? new Array(iconLen + 1).join("A") + "</artimage>" : "";
+  var baseLen = JSON.stringify(artExactMeta(name || "collection", desc, col.items.length,
+      iconVal, externalUrl, null)).length;
+  var traitsRoom = Math.min(ENGINE_META_MAX,
+      ENGINE_PAIR_BUDGET - ENGINE_DEF_WRAPPER - ENGINE_DEF_SIGN - artItemCeiling()) - baseLen - 20;
+  if (perItem <= 0) { return ART_MAX_MINT; }
+  return Math.max(0, Math.min(ART_MAX_MINT, Math.floor(traitsRoom / perItem)));
+}
+
+function artTraitsMapFor(col) {
+  var traitsMap = {};
+  for (var ti = 0; ti < col.items.length; ti++) {
+    var attrs = [];
+    var ts = artSealedTraits(ART_STUDIO.style, col.items[ti].traits || []);
+    for (var tk = 0; tk < ts.length; tk++) {
+      attrs.push({ trait_type: ts[tk].label, value: ts[tk].value });
+    }
+    traitsMap["" + col.items[ti].idx] = attrs;
+  }
+  return traitsMap;
+}
 
 /* mirror enginePhaseCreatePost field-for-field so the length is exact */
 function artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap) {
@@ -589,25 +665,13 @@ function artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap) {
 
 function artDefActual(name, desc, size, iconValue, externalUrl, traitsMap) {
   return JSON.stringify(artExactMeta(name, desc, size, iconValue, externalUrl, traitsMap)).length
-       + ART_DEF_WRAPPER;
+       + ENGINE_DEF_WRAPPER + ENGINE_DEF_SIGN;   // records are ALWAYS signed now
 }
 
-/* null = fits; else a human-readable refusal naming the real numbers */
-function artJointBudgetError(defActual, maxImg) {
-  if (defActual > ART_DEF_SPLIT_MAX) {
-    return "token record " + defActual + "B cannot split under the 64KB cap (max "
-         + ART_DEF_SPLIT_MAX + "B) — hosted icon or fewer traits";
-  }
-  if (defActual + maxImg > ART_TRANSFER_PAIR_BUDGET) {
-    return "record " + defActual + "B + largest image " + maxImg + "B exceeds the "
-         + ART_TRANSFER_PAIR_BUDGET + "B transfer budget — the lots would seal "
-         + "but never send. Hosted icon, fewer traits, or smaller items";
-  }
-  return null;
-}
 
 $("g-mint-btn").onclick = function () {
   var name = $("g-name").value.trim();
+  artSetPhotoValve();
   var desc = $("g-desc").value.trim();
   var size = artMintSize();
   if (!name) { artSetStatus("g-status", "name required", "err"); return; }
@@ -657,15 +721,7 @@ $("g-mint-btn").onclick = function () {
    * axes: the freed record bytes are what pay for full-quality Painted
    * plates under the joint transfer budget (all traits stay visible
    * in-app via art_meta). */
-  var traitsMap = {};
-  for (var ti = 0; ti < col.items.length; ti++) {
-    var attrs = [];
-    var ts = artSealedTraits(ART_STUDIO.style, col.items[ti].traits || []);
-    for (var tk = 0; tk < ts.length; tk++) {
-      attrs.push({ trait_type: ts[tk].label, value: ts[tk].value });
-    }
-    traitsMap["" + col.items[ti].idx] = attrs;
-  }
+  var traitsMap = artTraitsMapFor(col);
 
   artSetStatus("g-status", "preparing mint…");
   $("g-mint-btn").disabled = true;
@@ -688,33 +744,36 @@ $("g-mint-btn").onclick = function () {
     if (ib > maxImg) { maxImg = ib; }
   }
 
-  withGenIcon(function (iconRaw) {
-    /* JOINT budget guard: the definition (exact, not estimated) and the
-     * largest image must fit one transfer together — refuse or slim the icon
-     * rather than seal lots that can never leave the wallet */
-    var defA = artDefActual(name, desc, size, iconRaw, externalUrl, traitsMap);
-    var errA = artJointBudgetError(defA, maxImg);
-    if (errA && !iconUrl && col.items.length) {
+  withGenIcon(function (iconRaw) { artFitAndMint(iconRaw, 0); });
+
+  /* envelope-first, ALWAYS SIGNED: try the icon as produced, then slimmer,
+   * then none. If even iconless cannot sign, the traits/item-count are the
+   * mass \u2014 refuse with the computed signable item count. No unsigned path. */
+  function artFitAndMint(iconVal, attempt) {
+    var metaLen = JSON.stringify(
+      artExactMeta(name, desc, size, iconVal, externalUrl, traitsMap)).length;
+    var env = engineEnvelope(metaLen);
+    if (env.ok && maxImg <= env.imageBudget) {
+      if (attempt === 1) { toast("icon slimmed so every lot signs and travels"); }
+      if (attempt === 2) { toast("icon dropped so every lot signs and travels \u2014 the wallet shows the identicon"); }
+      artMintGo(iconVal);
+      return;
+    }
+    if (!iconUrl && attempt === 0 && col.items.length) {
       svgToIconB64(col.items[iconItem - 1].svg, function (slim) {
-        var slimIcon = slim ? slim + "</artimage>" : "";
-        var defB = artDefActual(name, desc, size, slimIcon, externalUrl, traitsMap);
-        if (slim && artJointBudgetError(defB, maxImg) === null) {
-          toast("icon slimmed to keep every lot transferable");
-          artMintGo(slimIcon);
-        } else {
-          artSetStatus("g-status", errA, "err");
-          $("g-mint-btn").disabled = false;
-        }
-      }, 3500);
+        artFitAndMint(slim ? slim + "</artimage>" : "", slim ? 1 : 2);
+      }, 2000);
       return;
     }
-    if (errA) {
-      artSetStatus("g-status", errA, "err");
-      $("g-mint-btn").disabled = false;
-      return;
-    }
-    artMintGo(iconRaw);
-  });
+    if (!iconUrl && attempt === 1) { artFitAndMint("", 2); return; }
+    var maxN = artMaxSignedItems(col, 0, name, desc, externalUrl);
+    artSetStatus("g-status",
+      (env.error || ("largest image " + maxImg + "B exceeds the " + env.imageBudget +
+        "B image room the signed record leaves")) +
+      (maxN > 0 && maxN < size ? " \u2014 this design signs at up to " + maxN + " items" : ""),
+      "err");
+    $("g-mint-btn").disabled = false;
+  }
 
   function artMintGo(iconB64) {
     MDS.cmd("getaddress", function (res) {
@@ -858,7 +917,7 @@ $("g-export-btn").onclick = function () {
   if (col.error) { artSetStatus("g-status", col.error, "err"); return; }
   var files = [];
   var meta = { name: $("g-name").value.trim() || "atelier-collection",
-               seed: ART_SEED, generator: "Atelier 4.1.15", items: [] };
+               seed: ART_SEED, generator: "Atelier 4.2.0", items: [] };
   for (var i = 0; i < col.items.length; i++) {
     var it = col.items[i];
     files.push({ name: ("00" + it.idx).slice(-3) + ".svg", data: it.svg });

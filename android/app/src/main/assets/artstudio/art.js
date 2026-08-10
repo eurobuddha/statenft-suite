@@ -3416,9 +3416,13 @@ function photoCompose(seed, salt, key, chosen, P) {
     G = opts[i][0];
     body = pixel ? photoDrawGrid(model, G, chosen.mode, chosen.outline, P)
                  : photoTrace(model, G, opts[i][1], chosen.mode, chosen.outline, P);
-    /* 8200 raw = ~10.9K b64 per plate: with an unsigned ~12K record that
-     * clears the 23000 joint transfer budget (record + image) with margin */
-    if (body.length <= 8200) { break; }
+    /* Raw-byte valve for the trace ladder. Default 8200 raw = ~10.9K b64 per
+     * plate. Hosts may lower it via the ART_PHOTO_MAXRAW global (the ALWAYS-
+     * SIGNED envelope computes the per-collection image budget and passes the
+     * raw equivalent here) — the ladder simply walks further down. */
+    var maxraw = (typeof ART_PHOTO_MAXRAW === "number" && ART_PHOTO_MAXRAW > 0)
+      ? Math.min(8200, ART_PHOTO_MAXRAW) : 8200;
+    if (body.length <= maxraw) { break; }
   }
   return s + "<g transform='translate(40 40) scale(" + N(432 / G) + ")'" +
     (pixel ? " shape-rendering='crispEdges'" : "") + ">" + body +

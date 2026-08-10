@@ -100,7 +100,7 @@ sandbox.ICON_BUDGET = 6000;
 
 let threw = null;
 try {
-  for (const f of ["art.js", "art-studio.js"]) {
+  for (const f of ["art.js", "engine.js", "art-studio.js"]) {
     const src = fs.readFileSync(path.join(MINIDAPP, f), "utf8");
     vm.runInNewContext(src, sandbox, { filename: f });
   }

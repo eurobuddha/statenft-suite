@@ -146,11 +146,22 @@ console.log("engineJointGate — signature-aware, engine-level");
 const light = engineJointGate(3000, 5500);        // small generative collection
 check("light collection signs", light.sign, true);
 check("light collection passes", light.error, null);
+/* ALWAYS SIGNED: the nosign branch is deleted project-wide. A record that
+ * cannot sign is REFUSED with the reason — never minted unsigned. */
 const math = engineJointGate(9554, 5500);         // the 'Math' fixture: meta 9554
 check("Math-weight record cannot sign", math.sign, false);
-check("Math-weight record still mints unsigned", math.error, null);
-const photo = engineJointGate(11500, 10900);      // photo pack at max budgets
-check("max photo collection mints unsigned", photo.error, null);
+check("Math-weight record is REFUSED, never unsigned", typeof math.error === "string", true);
+const photo = engineJointGate(11500, 10900);      // old photo-pack max weights
+check("heavy photo config is REFUSED, never unsigned", typeof photo.error === "string", true);
+/* the envelope calculator itself */
+check("envelope: meta max is 8367", sandbox.ENGINE_META_MAX, 8367);
+check("envelope: light meta leaves image room",
+  sandbox.engineEnvelope(3000).imageBudget, 19500 - 533 - 8400 - 3000);
+check("envelope: over meta max refuses", sandbox.engineEnvelope(9000).ok, false);
+check("gate signs when image fits the room",
+  engineJointGate(3000, 7500).sign, true);
+check("gate refuses when image exceeds the room",
+  typeof engineJointGate(3000, 7600).error === "string", true);
 const doomed = engineJointGate(11500, 14000);     // pre-fix Painted weights
 check("over-joint collection refused", typeof doomed.error === "string", true);
 const fat = engineJointGate(18000, 0);            // record alone past split max

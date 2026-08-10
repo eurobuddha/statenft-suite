@@ -1552,11 +1552,35 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                  * Refuse to create a collection whose lots could never leave
                  * the wallet (joint transfer budget - the "Random" lesson). */
                 if ("embed".equals(createMode)) {
-                    int maxImg = 0;
-                    for (String im : createImages) if (im != null && im.length() > maxImg) maxImg = im.length();
-                    int defA = MintEngine.defActualLen(m, collectionItemTraits);
-                    String jointErr = MintEngine.jointBudgetError(defA, maxImg);
-                    if (jointErr != null) { toast(jointErr); return; }
+                    /* ALWAYS SIGNED envelope: shrink over-budget photos into the
+                     * image room the signed record leaves; refuse only what
+                     * cannot shrink (SVG art) or a record past the split cap. */
+                    JSONObject metaJ = StateNft.tokenMetadata(m);
+                    if (collectionItemTraits != null && collectionItemTraits.length() > 0)
+                        put(metaJ, "traits", collectionItemTraits);
+                    int room = MintEngine.imageBudget(metaJ.toString().length());
+                    if (room < 0) {
+                        toast(MintEngine.jointGate(metaJ.toString().length(), 0));
+                        return;
+                    }
+                    for (int ii = 0; ii < createImages.length; ii++) {
+                        String im = createImages[ii];
+                        if (im == null || im.length() <= room) continue;
+                        if ("image/svg+xml".equals(ImageTools.mimeOf(im))) {
+                            toast("item " + (ii + 1) + " (" + im.length() + "B SVG) cannot be "
+                                    + "shrunk to the " + room + "B image room the signed record "
+                                    + "leaves - lighten the record or use raster art");
+                            return;
+                        }
+                        String out = ImageTools.recompressBase64(im, room);
+                        if (out.isEmpty()) {
+                            toast("item " + (ii + 1) + " cannot be shrunk to the " + room
+                                    + "B image room - lighten the record");
+                            return;
+                        }
+                        createImages[ii] = out;
+                        put(items.optJSONObject(ii), "image", out);
+                    }
                 }
                 JSONObject row = MintEngine.rowFromMeta(m, items);
                 if (collectionItemTraits != null && collectionItemTraits.length() > 0
@@ -1636,8 +1660,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         webF.addTextChangedListener(watch(sv -> nftWeb = sv));
 
         LinearLayout signRow = horizontal(Gravity.CENTER_VERTICAL);
-        TextView signChip = Design.chip(this, nftSign ? "Signed as creator ✓" : "Unsigned", nftSign);
-        signChip.setOnClickListener(v -> { nftSign = !nftSign; renderCreateNft(); });
+        TextView signChip = Design.chip(this, "Signed as creator ✓ — always", true);
         signRow.addView(signChip, new LinearLayout.LayoutParams(-2, -2));
         body.addView(signRow, lpm(0, 4, 0, 12));
 
@@ -1757,20 +1780,50 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             @Override public void onError(String message) { nftBusy = false; toast(message); renderCreateNft(); }
         };
         final org.json.JSONArray attrs = StateNft.traitsToAttributes(nftTraits);
-        if (nftSign) {
-            node.cmd("getaddress", new NodeApi.Cb() {
-                @Override public void onResult(JSONObject json) {
-                    JSONObject r = json.optJSONObject("response");
-                    String pk = r == null ? "" : r.optString("publickey", "");
-                    node.cmd(StateNft.nftCreateCommand(n, nftDesc.trim(), url, nftOwner.trim(),
-                            nftExternal.trim(), nftWeb.trim(), attrs, editions, pk), fin);
+        /* ALWAYS SIGNED: the artwork rides inside the token record with the
+         * 8.4KB signature. editions>1 must also split (3 records/txn);
+         * editions=1 only sends (2 records/txn). Shrink the art to fit. */
+        String urlFit = url;
+        if (!nftImage.isEmpty() && url.startsWith("<artimage>")) {
+            String probeCmd = StateNft.nftCreateCommand(n, nftDesc.trim(), "<artimage></artimage>",
+                    nftOwner.trim(), nftExternal.trim(), nftWeb.trim(), attrs, editions, "");
+            int sansLen = probeCmd.length();
+            int bound = editions > 1 ? MintEngine.META_MAX
+                    : (MintEngine.TRANSFER_PAIR_BUDGET - MintEngine.DEF_WRAPPER - MintEngine.DEF_SIGN_WEIGHT);
+            int artBudget = bound - sansLen - 24;
+            if (nftImage.length() > artBudget) {
+                if ("image/svg+xml".equals(ImageTools.mimeOf(nftImage))) {
+                    nftBusy = false;
+                    toast("this SVG (" + nftImage.length() + "B) cannot be shrunk to the "
+                            + artBudget + "B the signed record allows"
+                            + (editions > 1 ? " with " + editions + " editions" : ""));
+                    renderCreateNft();
+                    return;
                 }
-                @Override public void onError(String message) { nftBusy = false; toast(message); renderCreateNft(); }
-            });
-        } else {
-            node.cmd(StateNft.nftCreateCommand(n, nftDesc.trim(), url, nftOwner.trim(),
-                    nftExternal.trim(), nftWeb.trim(), attrs, editions, ""), fin);
+                String out = ImageTools.recompressBase64(nftImage, Math.max(1500, artBudget));
+                if (out.isEmpty() || out.length() > artBudget) {
+                    nftBusy = false;
+                    toast("artwork cannot be shrunk to the " + artBudget
+                            + "B the signed record allows - shorten the text or reduce editions");
+                    renderCreateNft();
+                    return;
+                }
+                nftImage = out;
+                urlFit = "<artimage>" + out + "</artimage>";
+                toast("artwork auto-shrunk so the NFT signs and travels");
+            }
         }
+        final String urlF = urlFit;
+        node.cmd("getaddress", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject json) {
+                JSONObject r = json.optJSONObject("response");
+                String pk = r == null ? "" : r.optString("publickey", "");
+                if (pk.isEmpty()) { nftBusy = false; toast("could not fetch the signing key"); renderCreateNft(); return; }
+                node.cmd(StateNft.nftCreateCommand(n, nftDesc.trim(), urlF, nftOwner.trim(),
+                        nftExternal.trim(), nftWeb.trim(), attrs, editions, pk), fin);
+            }
+            @Override public void onError(String message) { nftBusy = false; toast(message); renderCreateNft(); }
+        });
     }
 
     /* ---- custom token ---- */
@@ -1871,7 +1924,43 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         go.setText("MINTING…");
         String iconValue = !tokUrl.trim().isEmpty() ? tokUrl.trim()
                 : (!tokIcon.isEmpty() ? "<artimage>" + tokIcon : "");
-        node.cmd(StateNft.tokenCreateCommand(n, tokDesc.trim(), tokTicker.trim(), iconValue, supply, dec, tokPairs),
+        /* ALWAYS SIGNED: gate the record (icon + pairs + signature) against the
+         * split cap, auto-slimming the icon rather than refusing. */
+        String iconFit = iconValue;
+        {
+            String probe = StateNft.tokenCreateCommand(n, tokDesc.trim(), tokTicker.trim(), iconFit, supply, dec, tokPairs);
+            if (probe.length() + MintEngine.DEF_SIGN_WEIGHT > MintEngine.DEF_SPLIT_MAX
+                    && !tokIcon.isEmpty() && iconFit.startsWith("<artimage>")) {
+                int room = MintEngine.DEF_SPLIT_MAX - MintEngine.DEF_SIGN_WEIGHT
+                        - (probe.length() - tokIcon.length()) - 24;
+                String out = ImageTools.recompressBase64(tokIcon, Math.max(1200, room));
+                if (!out.isEmpty() && out.length() <= room) {
+                    iconFit = "<artimage>" + out + "</artimage>";
+                    toast("icon auto-slimmed to keep the token signed");
+                } else {
+                    tokBusy = false;
+                    toast("icon + fields exceed the signed record budget - hosted icon URL or shorter fields");
+                    renderCreateToken();
+                    return;
+                }
+            } else if (probe.length() + MintEngine.DEF_SIGN_WEIGHT > MintEngine.DEF_SPLIT_MAX) {
+                tokBusy = false;
+                toast("record exceeds the signed budget - shorten the description or custom fields");
+                renderCreateToken();
+                return;
+            }
+        }
+        final String iconFitF = iconFit;
+        final String nF = n;
+        final long supplyF = supply;
+        final int decF = dec;
+        node.cmd("getaddress", new NodeApi.Cb() {
+            @Override public void onResult(JSONObject ga) {
+                JSONObject gr = ga.optJSONObject("response");
+                String pk = gr == null ? "" : gr.optString("publickey", "");
+                if (pk.isEmpty()) { tokBusy = false; toast("could not fetch the signing key"); renderCreateToken(); return; }
+        node.cmd(StateNft.tokenCreateCommand(nF, tokDesc.trim(), tokTicker.trim(), iconFitF, supplyF, decF, tokPairs)
+                        + " signtoken:" + pk,
                 new NodeApi.Cb() {
                     @Override public void onResult(JSONObject json) {
                         tokBusy = false;
@@ -1889,6 +1978,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     }
                     @Override public void onError(String message) { tokBusy = false; toast(message); renderCreateToken(); }
                 });
+            }
+            @Override public void onError(String message) { tokBusy = false; toast(message); renderCreateToken(); }
+        });
     }
 
     private String previewTokenJson() {
@@ -2360,11 +2452,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         : ArtStudio.svgBitmap(lead.optString("svg"), 512);
                 iconB64 = ImageTools.iconFromBitmap(b, ImageTools.ICON_BUDGET);
             }
-            /* JOINT budget guard (exact, not estimated): the token record and
-             * the LARGEST embedded image travel together, twice, in every
-             * transfer — over ~23KB combined the lots seal but can never leave
-             * the wallet (the "Random" lesson). Slim the icon; refuse rather
-             * than mint untransferable lots. */
+            /* ALWAYS SIGNED envelope at the handoff: fit the icon into the
+             * room; the binding exact gate runs again at the mint click. */
             if (err.isEmpty()) {
                 int maxImg = 0;
                 for (String im : images) if (im != null && im.length() > maxImg) maxImg = im.length();
@@ -2376,22 +2465,33 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 probe.icon = !iconB64.isEmpty() ? iconB64
                         : (images.length > 0 && images[0].length() <= ImageTools.ICON_BUDGET
                             ? images[0] : "");
-                int defA = MintEngine.defActualLen(probe, traitsMap);
-                String jointErr = MintEngine.jointBudgetError(defA, maxImg);
-                if (jointErr != null) {
+                JSONObject pm = StateNft.tokenMetadata(probe);
+                if (traitsMap.length() > 0) put(pm, "traits", traitsMap);
+                String gate = MintEngine.jointGate(pm.toString().length(), maxImg);
+                if (!"sign".equals(gate)) {
                     JSONObject lead = itemsF.optJSONObject(0);
                     android.graphics.Bitmap b = lead == null ? null
                             : ArtStudio.svgBitmap(lead.optString("svg"), 512);
-                    String slim = ImageTools.iconFromBitmap(b, 4000);
+                    String slim = ImageTools.iconFromBitmap(b, 2000);
                     probe.icon = slim;
-                    if (!slim.isEmpty()
-                            && MintEngine.jointBudgetError(MintEngine.defActualLen(probe, traitsMap), maxImg) == null) {
+                    JSONObject pm2 = StateNft.tokenMetadata(probe);
+                    if (traitsMap.length() > 0) put(pm2, "traits", traitsMap);
+                    if (!slim.isEmpty() && "sign".equals(MintEngine.jointGate(pm2.toString().length(), maxImg))) {
                         iconB64 = slim;
                         LocalStore.logEvent(MainActivity.this,
-                                "Icon slimmed to keep every lot transferable (record was "
-                                + defA + "B beside a " + maxImg + "B image)");
+                                "Icon slimmed so every lot signs and travels");
                     } else {
-                        err = jointErr;
+                        probe.icon = "";
+                        JSONObject pm3 = StateNft.tokenMetadata(probe);
+                        if (traitsMap.length() > 0) put(pm3, "traits", traitsMap);
+                        String gate3 = MintEngine.jointGate(pm3.toString().length(), maxImg);
+                        if ("sign".equals(gate3)) {
+                            iconB64 = "";
+                            LocalStore.logEvent(MainActivity.this,
+                                    "Icon dropped so every lot signs and travels - wallet shows the identicon");
+                        } else {
+                            err = gate3;
+                        }
                     }
                 }
             }
@@ -2448,7 +2548,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         final String rgba = px == null ? null : artRgbaJson(px);
         /* AI paintings are flat — richer 10-color trace, and the
          * painting itself rides along for the Painted finish */
-        final String paint = ai ? ImageTools.paintB64(toon, 10200) : "";
+        final String paint = ai ? ImageTools.paintB64(toon, 8600) : "";  // fits the PROVEN 19500 pair budget
         runOnUiThread(() -> {
             if (rgba == null) { toast("Could not read that photo"); return; }
             ArtStudio.with(this, s -> s.setPhoto(rgba, ai ? 10 : 8, paint, k -> {

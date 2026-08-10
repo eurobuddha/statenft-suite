@@ -100,7 +100,7 @@ function sendTick(cb) {
                 var stl = 0;
                 var stt = sealed[di].state || [];
                 for (var dj = 0; dj < stt.length; dj++) { stl += ("" + stt[dj].data).length; }
-                if (2 * (defLen + stl) + 12000 > 64000) { doomed++; }
+                if (defLen + stl > ENGINE_PAIR_BUDGET + 1000) { doomed++; }
               }
               if (doomed === sealed.length) {
                 sendSetStatus(row.ID, "ERROR", "these lots cannot fit a transfer " +

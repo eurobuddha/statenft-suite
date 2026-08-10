@@ -481,7 +481,7 @@ function refreshProvenance() {
       $("lr-sig-val").innerText = "signature INVALID";
     } else {
       ledgerState($("lr-sig"), "none");
-      $("lr-sig-val").innerText = "unsigned";
+      $("lr-sig-val").innerText = "unsigned — creator proven by contract & stamping";
     }
     var web = v.web || {};
     // keep the shield cache + hero badge in sync with the freshest check
@@ -935,6 +935,19 @@ function inspTouchEnd(e) {
 var NEED_IMAGES = {};
 var NEED_COUNT = 0;
 
+/* recovery images obey the SAME signed envelope as fresh mints — the row's
+ * real record decides the image budget */
+function needImagesBudget() {
+  if (!OPEN_ROW) { return IMG_BUDGET; }
+  var traits = null;
+  try { traits = OPEN_ROW.ITEMTRAITS ? JSON.parse(OPEN_ROW.ITEMTRAITS) : null; } catch (e) {}
+  var metaLen = JSON.stringify(artExactMeta(OPEN_ROW.NAME, OPEN_ROW.DESCRIPTION,
+    parseInt(OPEN_ROW.SIZE, 10) || 0, OPEN_ROW.ICON || "", OPEN_ROW.EXTERNALURL || "",
+    traits)).length;
+  var env = engineEnvelope(metaLen);
+  return env.ok ? Math.min(IMG_BUDGET, env.imageBudget) : 4000;
+}
+
 function renderNeedImages() {
   var box = $("need-images");
   box.classList.remove("hidden");
@@ -978,7 +991,7 @@ function renderNeedImages() {
         slot.querySelector("input").onchange = function (e) {
           var f = e.target.files[0];
           if (!f) { return; }
-          compressImage(f, IMG_BUDGET, function (b64) {
+          compressImage(f, needImagesBudget(), function (b64) {
             if (!b64) { toast("could not process image"); return; }
             NEED_IMAGES[idx] = b64;
             renderNeedImages();
@@ -1213,6 +1226,34 @@ function compressImage(file, budget, cb) {
   reader.readAsDataURL(file);
 }
 
+/* Re-encode an already-picked raster b64 down to a (possibly newly smaller)
+ * budget — the envelope can shrink after images were chosen, and the user's
+ * rule is SHRINK, never fail. SVGs cannot be lossy-shrunk: returns null. */
+function reshrinkB64(b64, budget, cb) {
+  if (!b64) { cb(""); return; }
+  if (b64.length <= budget) { cb(b64); return; }
+  if (b64Mime(b64) === "image/svg+xml") { cb(null); return; }
+  var img = new Image();
+  img.onload = function () {
+    var dims = [1080, 900, 720, 560, 420, 300, 240, 180];
+    var quals = [0.85, 0.75, 0.65, 0.55, 0.45];
+    for (var d = 0; d < dims.length; d++) {
+      var s = Math.min(1, dims[d] / Math.max(img.width, img.height));
+      for (var q = 0; q < quals.length; q++) {
+        var cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(img.width * s));
+        cv.height = Math.max(1, Math.round(img.height * s));
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        var out = cv.toDataURL("image/jpeg", quals[q]).split(",")[1];
+        if (out.length <= budget) { cb(out); return; }
+      }
+    }
+    cb(null);
+  };
+  img.onerror = function () { cb(null); };
+  img.src = b64src(b64);
+}
+
 function mintCollection() {
   var name = $("c-name").value.trim();
   var size = Math.max(2, Math.min(20, parseInt($("c-size").value, 10) || 0));
@@ -1257,18 +1298,36 @@ function mintCollection() {
     });
   }
   withIcon(function () {
-  /* JOINT transfer budget (see art-studio.js): the token record and the
-   * largest embedded image travel TOGETHER, twice, in every transfer — over
-   * ~23KB combined the lots seal but can never leave the wallet ("Random"). */
-  if (mode === "embed") {
-    var maxImg = 0;
-    for (var mi = 0; mi < size; mi++) {
-      if (WIZ_IMAGES[mi] && WIZ_IMAGES[mi].length > maxImg) { maxImg = WIZ_IMAGES[mi].length; }
+  /* ALWAYS SIGNED: the envelope (record incl. the 8.4KB signature) decides
+   * the image budget — over-budget photos are SHRUNK automatically, never
+   * refused, never minted unsigned. SVGs cannot be lossy-shrunk: those refuse. */
+  function fitted(next2) {
+    if (mode !== "embed") {
+      var ml0 = JSON.stringify(artExactMeta(name, desc, size, icon, externalurl, null)).length;
+      var e0 = engineEnvelope(ml0);
+      if (!e0.ok) { status.innerText = e0.error; return; }
+      next2(); return;
     }
-    var defA = artDefActual(name, desc, size, icon, externalurl, null);
-    var jointErr = artJointBudgetError(defA, maxImg);
-    if (jointErr) { status.innerText = jointErr; return; }
+    var metaLen = JSON.stringify(artExactMeta(name, desc, size, icon, externalurl, null)).length;
+    var env = engineEnvelope(metaLen);
+    if (!env.ok) { status.innerText = env.error; return; }
+    var budget = Math.min(IMG_BUDGET, env.imageBudget);
+    (function shrinkNext(i) {
+      if (i >= size) { next2(); return; }
+      if (!WIZ_IMAGES[i] || WIZ_IMAGES[i].length <= budget) { shrinkNext(i + 1); return; }
+      reshrinkB64(WIZ_IMAGES[i], budget, function (out) {
+        if (out === null) {
+          status.innerText = "item #" + (i + 1) + " (" + WIZ_IMAGES[i].length +
+            "B) cannot be shrunk to the " + budget + "B image budget the signed " +
+            "record leaves — use a raster image or lighten the record";
+          return;
+        }
+        WIZ_IMAGES[i] = out;
+        shrinkNext(i + 1);
+      });
+    })(0);
   }
+  fitted(function () {
   MDS.cmd("getaddress", function (res) {
     if (!res.status) { status.innerText = "getaddress failed"; return; }
     var addr = res.response.address;
@@ -1315,6 +1374,7 @@ function mintCollection() {
         });
       });
   });
+  });   // fitted
   });   // withIcon
 }
 
@@ -1376,7 +1436,7 @@ function doTransfer() {
   var stF = stateLen;
   MDS.cmd("tokens tokenid:" + TOKENID, function (tres) {
     var defLen = (tres.status && tres.response) ? JSON.stringify(tres.response).length : 0;
-    if (defLen > 0 && 2 * (defLen + stF) + 12000 > 64000) {
+    if (defLen > 0 && defLen + stF > ENGINE_PAIR_BUDGET + 1000) {
       status.innerText = "this lot cannot fit a transfer under the chain's 64KB " +
         "cap (record " + defLen + "B + state " + stF + "B, both carried twice) — " +
         "it was minted before the transfer-budget guard. Burial is the only exit.";
@@ -1759,8 +1819,34 @@ $("nft-mint-btn").onclick = function () {
   if (!validCmdUrl($("n-external").value.trim()) || !validCmdUrl($("n-webvalidate").value.trim())) {
     status.innerText = "URLs must not contain spaces, quotes or semicolons"; return;
   }
-  status.innerText = "sealing…";
+  status.innerText = "sealing\u2026";
   var web = $("n-webvalidate").value.trim();
+  /* ALWAYS SIGNED: the artwork rides inside the token record with the 8.4KB
+   * signature. editions>1 must also split (3 records/txn), editions=1 only
+   * sends (2 records/txn) — compute the art budget and SHRINK to fit. */
+  function fitArt(cb) {
+    var sansLen = JSON.stringify(nftMeta()).length - NFT_ART.length;
+    var bound = editions > 1 ? ENGINE_META_MAX
+                             : (ENGINE_PAIR_BUDGET - ENGINE_DEF_WRAPPER - ENGINE_DEF_SIGN);
+    var artBudget = bound - sansLen - 24;   // artimage tag slack
+    if (artBudget < 1500) {
+      status.innerText = "title/description/URLs leave only " + artBudget +
+        "B for the artwork - shorten the text";
+      return;
+    }
+    if (NFT_ART.length <= artBudget) { cb(); return; }
+    reshrinkB64(NFT_ART, artBudget, function (out) {
+      if (out === null) {
+        status.innerText = "this artwork (" + NFT_ART.length + "B) cannot be " +
+          "shrunk to the " + artBudget + "B the signed record allows" +
+          (editions > 1 ? " with " + editions + " editions - fewer editions help" : "");
+        return;
+      }
+      NFT_ART = out;
+      toast("artwork auto-shrunk to keep the NFT signed and sendable");
+      cb();
+    });
+  }
   function post(signPk) {
     var cmd = "tokencreate name:" + JSON.stringify(nftMeta()) +
               " amount:" + editions + " decimals:0";
@@ -1783,11 +1869,15 @@ $("nft-mint-btn").onclick = function () {
       studioShow("hub");
     });
   }
-  if ($("n-sign").checked) {
+  fitArt(function () {
     MDS.cmd("getaddress", function (res) {
-      post(res.status && res.response ? res.response.publickey : "");
+      if (!res.status || !res.response || !res.response.publickey) {
+        status.innerText = "could not fetch the signing key - node offline?";
+        return;
+      }
+      post(res.response.publickey);   // ALWAYS signed
     });
-  } else { post(""); }
+  });
 };
 
 /* ---------- custom token ---------- */
@@ -1879,9 +1969,38 @@ $("token-mint-btn").onclick = function () {
   if (!validCmdUrl($("t-iconurl").value.trim())) {
     status.innerText = "icon URL must not contain spaces, quotes or semicolons"; return;
   }
-  status.innerText = "minting…";
+  status.innerText = "minting\u2026";
+  /* ALWAYS SIGNED: the record (icon + pairs + signature) must stay splittable
+   * - auto-slim the icon into the envelope rather than refuse. */
+  function tokenFit(cb) {
+    var metaLen = JSON.stringify(tokenMeta(false)).length;
+    if (metaLen <= ENGINE_META_MAX) { cb(); return; }
+    if (!TOKEN_ICON) {
+      status.innerText = "record " + metaLen + "B exceeds the " + ENGINE_META_MAX +
+        "B signed budget - shorten the description or custom fields";
+      return;
+    }
+    var iconBudget = ENGINE_META_MAX - (metaLen - TOKEN_ICON.length) - 24;
+    reshrinkB64(TOKEN_ICON, Math.max(1200, iconBudget), function (out) {
+      if (out === null || JSON.stringify(tokenMeta(false)).length - TOKEN_ICON.length + out.length > ENGINE_META_MAX) {
+        status.innerText = "icon + fields exceed the signed record budget - " +
+          "use a hosted icon URL or shorter fields";
+        return;
+      }
+      TOKEN_ICON = out;
+      toast("icon auto-slimmed to keep the token signed");
+      cb();
+    });
+  }
+  tokenFit(function () {
+  MDS.cmd("getaddress", function (ka) {
+    if (!ka.status || !ka.response || !ka.response.publickey) {
+      status.innerText = "could not fetch the signing key - node offline?";
+      return;
+    }
   MDS.cmd("tokencreate name:" + JSON.stringify(tokenMeta(false)) +
-          " amount:" + supply + " decimals:" + dec, function (res) {
+          " amount:" + supply + " decimals:" + dec +
+          " signtoken:" + ka.response.publickey, function (res) {
     if (!res.status) {
       status.innerText = "mint failed: " + (res.error || "node refused");
       return;
@@ -1895,6 +2014,8 @@ $("token-mint-btn").onclick = function () {
     $("t-icon-glyph").innerText = "+";
     renderPairs();
     studioShow("hub");
+  });
+  });
   });
 };
 

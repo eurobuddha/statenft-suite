@@ -142,7 +142,7 @@ public final class MintEngine {
         if (itemTraits != null && itemTraits.length() > 0) put(tokenMeta, "traits", itemTraits);
         int maxImg = maxImageLen(row);
         String gate = jointGate(tokenMeta.toString().length(), maxImg);
-        if (!"sign".equals(gate) && !"nosign".equals(gate)) {
+        if (!"sign".equals(gate)) {
             setError(ctx, row, gate, done);
             return;
         }
@@ -151,12 +151,8 @@ public final class MintEngine {
                 + " decimals:0"
                 + " script:\"" + StateNft.script(row.optString("creatorpk"), row.optString("mode")) + "\""
                 + " state:{\"0\":\"0\"}";
-        if ("sign".equals(gate)) {
-            cmd += " signtoken:" + row.optString("creatorpk");
-        } else {
-            LocalStore.logEvent(ctx, "Token signature dropped to keep the lots transferable"
-                    + " - the locked script still proves the creator");
-        }
+        // ALWAYS signed — the gate above guarantees the signed record fits
+        cmd += " signtoken:" + row.optString("creatorpk");
         if (!row.optString("webvalidate").isEmpty()) cmd += " webvalidate:" + row.optString("webvalidate");
         cmd(node, cmd, new Cb() {
             @Override public void ok(JSONObject res) {
@@ -283,7 +279,7 @@ public final class MintEngine {
      * sealed forever, transferable never. The definition is computed EXACTLY:
      * the metadata JSON the engine seals plus the measured 533-byte record
      * wrapper (constant across every minted collection on this chain). */
-    static final int TRANSFER_PAIR_BUDGET = 23000;
+    static final int TRANSFER_PAIR_BUDGET = 19500;  // 20000 combined CONFIRMED on-chain 2026-08-10 (21000 failed) − 500 margin
     static final int DEF_WRAPPER = 533;
     static final int DEF_SPLIT_MAX = 17300;   // 3 defs + ~12K sig under 64KB
     /** signtype+signedby+signature JSON weight — lands in the record AFTER
@@ -292,41 +288,42 @@ public final class MintEngine {
      *  to 18.4K — past the split bound. Counted here forever after. */
     static final int DEF_SIGN_WEIGHT = 8400;
 
-    /** The engine-level gate: sign when the TRUE (signed) weights fit, drop
-     *  the redundant token signature when that alone saves transferability
-     *  (the locked script already proves the creator via SIGNEDBY), refuse
-     *  honestly when even unsigned cannot travel. Returns "sign", "nosign",
-     *  or an error message. */
+    /** metaLen ceiling with the signature ALWAYS aboard. */
+    static final int META_MAX = DEF_SPLIT_MAX - DEF_WRAPPER - DEF_SIGN_WEIGHT;  // 8367
+
+    /** ALWAYS SIGNED: the image budget the signed record leaves, or -1 when
+     *  the record alone cannot split. The one size authority — UIs compute
+     *  this FIRST and shrink content into it. */
+    static int imageBudget(int metaLen) {
+        if (metaLen > META_MAX) return -1;
+        return TRANSFER_PAIR_BUDGET - DEF_WRAPPER - DEF_SIGN_WEIGHT - metaLen;
+    }
+
+    /** Sign-or-error. The nosign branch is DELETED project-wide — never
+     *  reintroduce it: an unsigned mint silently trades the creator's
+     *  provenance away, which is never the engine's call to make. */
     static String jointGate(int metaLen, int maxImg) {
-        int unsigned = metaLen + DEF_WRAPPER;
-        int signed = unsigned + DEF_SIGN_WEIGHT;
-        if (signed <= DEF_SPLIT_MAX && signed + maxImg <= TRANSFER_PAIR_BUDGET) return "sign";
-        if (unsigned <= DEF_SPLIT_MAX && unsigned + maxImg <= TRANSFER_PAIR_BUDGET) return "nosign";
-        return "definition " + unsigned + "B + largest image " + maxImg
-             + "B breaks the transfer budget (" + TRANSFER_PAIR_BUDGET
-             + "B) - hosted icon, lighter traits or fewer items";
+        int room = imageBudget(metaLen);
+        if (room < 0) {
+            return "record " + (metaLen + DEF_WRAPPER + DEF_SIGN_WEIGHT)
+                 + "B signed cannot split under the 64KB cap (metadata " + metaLen
+                 + "B > " + META_MAX + "B) - fewer items, lighter traits or hosted icon";
+        }
+        if (maxImg > room) {
+            return "largest image " + maxImg + "B exceeds the " + room
+                 + "B image budget left by the signed record (metadata " + metaLen
+                 + "B) - smaller images, lighter traits or hosted icon";
+        }
+        return "sign";
     }
 
     /** Exact definition length the engine would seal for this Meta + traits. */
     static int defActualLen(StateNft.Meta m, JSONObject itemTraits) {
         JSONObject meta = StateNft.tokenMetadata(m);
         if (itemTraits != null && itemTraits.length() > 0) put(meta, "traits", itemTraits);
-        return meta.toString().length() + DEF_WRAPPER;
+        return meta.toString().length() + DEF_WRAPPER + DEF_SIGN_WEIGHT;   // ALWAYS signed
     }
 
-    /** null = fits both bounds; else a refusal naming the real numbers. */
-    static String jointBudgetError(int defActual, int maxImg) {
-        if (defActual > DEF_SPLIT_MAX) {
-            return "token record " + defActual + "B cannot split under the 64KB cap (max "
-                 + DEF_SPLIT_MAX + "B) — hosted icon or fewer traits";
-        }
-        if (defActual + maxImg > TRANSFER_PAIR_BUDGET) {
-            return "record " + defActual + "B + largest image " + maxImg + "B exceeds the "
-                 + TRANSFER_PAIR_BUDGET + "B transfer budget — the lots would seal but never "
-                 + "send. Hosted icon, fewer traits, or smaller items";
-        }
-        return null;
-    }
 
     /** Unit outputs per split txn such that (k units + change + input) token
      *  definitions stay within ~40KB, leaving 24KB headroom for the signature

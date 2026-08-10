@@ -398,33 +398,50 @@ function enginePhaseCreate(row, tip, done) {
   }, function (e) { engineSetError(row, e, done); });
 }
 
-/* ---- the joint-budget gate, at the ENGINE — the last line of defense ----
- * The token signature (signtype/signedby/signature, ~8.4KB) lands in the
- * record AFTER tokencreate, invisible to every client-side estimate: 'Math'
- * passed each UI guard at ~10K visible definition, then signing pushed the
- * real record to 18.4K — past the split bound, sealed forever. The engine
- * now measures the TRUE weights before posting anything: sign when it fits,
- * DROP the signature when that alone saves transferability (the locked
- * script already proves the creator via SIGNEDBY — the token signature is
- * redundant provenance), and refuse honestly when even unsigned cannot
- * travel. No UI path can reach tokencreate around this. */
+/* ---- ALWAYS SIGNED, ALWAYS FITS — the envelope, at the ENGINE ----
+ * Every token this engine mints carries the creator signature. Period.
+ * The signature (~8.4KB, measured) is part of the immutable record, and the
+ * record rides TWICE in every split/transfer under the 64KB TxPoW cap — so
+ * the budget math starts FROM the signature and fits the content around it:
+ *
+ *   record R = metaLen + WRAPPER + SIGN            (signature never optional)
+ *   (A) split:    R ≤ SPLIT_MAX      → metaLen ≤ ENGINE_META_MAX
+ *   (B) transfer: R + maxImage ≤ PAIR → imageBudget = PAIR − WRAPPER − SIGN − metaLen
+ *
+ * The UIs compute the same envelope FIRST and shrink images/icons into it,
+ * so this engine gate is a backstop that should never fire. When it does,
+ * the answer is an honest ERROR — never an unsigned mint, never silence. */
 var ENGINE_DEF_WRAPPER = 533;     // fullDef - len(metaJSON), constant on-chain
 var ENGINE_DEF_SIGN = 8400;       // measured signtype+signedby+signature weight
 var ENGINE_DEF_SPLIT_MAX = 17300; // 3 records + sig under the 64KB split txn
-var ENGINE_PAIR_BUDGET = 23000;   // record + largest image, proven transfer point
+var ENGINE_PAIR_BUDGET = 19500;   // record + largest image: 20000 combined CONFIRMED on-chain 2026-08-10 (21000 failed) − 500 margin
+var ENGINE_META_MAX = ENGINE_DEF_SPLIT_MAX - ENGINE_DEF_WRAPPER - ENGINE_DEF_SIGN;  // 8367
 
+/* The one size authority: given the exact metadata JSON length, what image
+ * budget remains? ok:false carries the human-readable reason. */
+function engineEnvelope(metaLen) {
+  if (metaLen > ENGINE_META_MAX) {
+    return { ok: false, imageBudget: 0,
+      error: "record " + (metaLen + ENGINE_DEF_WRAPPER + ENGINE_DEF_SIGN) +
+        "B signed cannot split under the 64KB cap (metadata " + metaLen +
+        "B > " + ENGINE_META_MAX + "B) - fewer items, lighter traits or hosted icon" };
+  }
+  return { ok: true, error: null,
+    imageBudget: ENGINE_PAIR_BUDGET - ENGINE_DEF_WRAPPER - ENGINE_DEF_SIGN - metaLen };
+}
+
+/* Sign-or-error. The nosign branch is DELETED project-wide — do not
+ * reintroduce it: an unsigned mint trades the creator's provenance away
+ * silently, which is never this engine's call to make. */
 function engineJointGate(metaLen, maxImg) {
-  var unsigned = metaLen + ENGINE_DEF_WRAPPER;
-  var signed = unsigned + ENGINE_DEF_SIGN;
-  if (signed <= ENGINE_DEF_SPLIT_MAX && signed + maxImg <= ENGINE_PAIR_BUDGET) {
-    return { sign: true, error: null };
+  var env = engineEnvelope(metaLen);
+  if (!env.ok) { return { sign: false, error: env.error }; }
+  if (maxImg > env.imageBudget) {
+    return { sign: false, error: "largest image " + maxImg + "B exceeds the " +
+      env.imageBudget + "B image budget left by the signed record (metadata " +
+      metaLen + "B) - smaller images, lighter traits or hosted icon" };
   }
-  if (unsigned <= ENGINE_DEF_SPLIT_MAX && unsigned + maxImg <= ENGINE_PAIR_BUDGET) {
-    return { sign: false, error: null };
-  }
-  return { sign: false, error: "definition " + unsigned + "B + largest image " +
-    maxImg + "B breaks the transfer budget (" + ENGINE_PAIR_BUDGET +
-    "B) - hosted icon, lighter traits or fewer items" };
+  return { sign: true, error: null };
 }
 
 function enginePhaseCreatePost(row, tip, done) {
@@ -468,15 +485,12 @@ function enginePhaseCreatePost(row, tip, done) {
       }
       var gate = engineJointGate(metaStr.length, maxImg);
       if (gate.error) { engineSetError(row, gate.error, done); return; }
+      // ALWAYS signed — the gate above guarantees the signed record fits
       var cmd = "tokencreate name:" + metaStr +
                 " amount:" + row.SIZE + " decimals:0" +
                 " script:\"" + engineScript(row.CREATORPK, row.MODE) + "\"" +
-                " state:{\"0\":\"0\"}";
-      if (gate.sign) { cmd += " signtoken:" + row.CREATORPK; }
-      else {
-        MDS.log("collection " + row.ID + ": token signature dropped to keep " +
-                "the lots transferable - the locked script still proves the creator");
-      }
+                " state:{\"0\":\"0\"}" +
+                " signtoken:" + row.CREATORPK;
       if (row.WEBVALIDATE) { cmd += " webvalidate:" + row.WEBVALIDATE; }
       engineCmd(cmd, function () {
         MDS.sql("UPDATE collections SET posted=1, postedat=" + tip +

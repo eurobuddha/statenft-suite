@@ -80,9 +80,16 @@ public final class ArtStudio {
         });
     }
 
-    /** {items:[{idx,svg,traits,key,score,bytes,salt}], error} — deterministic per (seed, cfg). */
+    /** {items:[{idx,svg,traits,key,score,bytes,salt}], error} — deterministic per (seed, cfg).
+     *  Sets the photo pack's raw-byte valve from the ALWAYS-SIGNED envelope so
+     *  generated plates already fit the image room a signed record leaves
+     *  (b64 ≈ raw*4/3; ~2.5K metadata estimate; exact gate re-checks at mint). */
     public void generate(String seed, int n, JSONObject cfg, Consumer<JSONObject> cb) {
-        eval("artCollection(" + JSONObject.quote(seed) + "," + n + "," + cfg.toString() + ")",
+        int room = MintEngine.TRANSFER_PAIR_BUDGET - MintEngine.DEF_WRAPPER
+                 - MintEngine.DEF_SIGN_WEIGHT - 2500;
+        int maxRaw = Math.max(1800, (room - 8) * 3 / 4);
+        eval("(ART_PHOTO_MAXRAW=" + maxRaw + ",artCollection("
+                        + JSONObject.quote(seed) + "," + n + "," + cfg.toString() + "))",
                 v -> cb.accept(asObject(v)));
     }
 

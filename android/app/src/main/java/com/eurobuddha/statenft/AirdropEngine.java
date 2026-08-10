@@ -192,7 +192,7 @@ public final class AirdropEngine {
                     if (sv != null) stateLen += sv.optString("data").length();
                 }
                 int defLen = j.optInt("deflen", 0);
-                if (defLen > 0 && 2 * (defLen + stateLen) + 12000 > 64000) {
+                if (defLen > 0 && defLen + stateLen > MintEngine.TRANSFER_PAIR_BUDGET + 1000) {
                     put(e, "status", "FAIL");
                     put(e, "error", "cannot fit a transfer under the 64KB cap (record "
                             + defLen + "B + state " + stateLen + "B, both carried twice) — "
