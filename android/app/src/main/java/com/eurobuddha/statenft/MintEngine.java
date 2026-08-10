@@ -965,15 +965,15 @@ public final class MintEngine {
     }
 
     /** A reservation is DEAD when its index never confirmed and its reserved
-     *  coin still sits unspent among the blanks RESERVE_TTL blocks after the
-     *  reservation was taken. The ONLY duplicate-proof cure is re-posting the
-     *  SAME index onto the SAME coin: if the original txn ever resurfaces,
-     *  both spend one coin and the chain keeps exactly one seal. Moving the
-     *  index to a different blank would let both confirm — a permanent
-     *  duplicate under the locked contract. Reservations without a recorded
-     *  tip (pre-0.5.3 rows) get stamped with the current tip and wait a full
-     *  TTL from now. Returns [coinid, idx] pairs to re-post this tick. */
-    private static final int RESERVE_TTL = 12;
+     *  coin still sits unspent among the blanks. The ONLY duplicate-proof
+     *  cure is re-posting the SAME index onto the SAME coin: if the original
+     *  txn ever resurfaces, both spend one coin and the chain keeps exactly
+     *  one seal — which also means same-pair re-posts are safe at the
+     *  ordinary 6-block per-coin spend-lock cadence (pendingOk); the old
+     *  12-block wait throttled Maths to ~one seal per window. Capped at
+     *  REPLAN_BATCH per tick: a burst of competing TxPoWs starves itself
+     *  down to about one confirmation per round. */
+    private static final int REPLAN_BATCH = 2;
     /** A reservation whose coin has vanished from the coin set entirely with
      *  its index still unconfirmed can only be freed after a much deeper wait
      *  — the txn that consumed the coin may still surface its stamp. */
@@ -998,14 +998,15 @@ public final class MintEngine {
             if (cid.isEmpty()) continue;
             if (chainUsed.contains(String.valueOf(it.optInt("idx")))) continue;
             int at = it.optInt("reservedat", -1);
-            if (at < 0) { put(it, "reservedat", tip); changed = true; continue; }
+            if (at < 0) { put(it, "reservedat", tip); changed = true; }
             if (blankIds.contains(cid)) {
-                if (tip - at < RESERVE_TTL) continue;
+                if (!LocalStore.pendingOk(ctx, cid, tip)) continue;
+                if (replans.size() >= REPLAN_BATCH) continue;
                 LocalStore.logEvent(ctx, row.optString("name") + ": re-posting idx "
-                        + it.optInt("idx") + " onto its reserved coin — still blank "
-                        + (tip - at) + " blocks after the stamp was posted");
+                        + it.optInt("idx") + " onto its reserved coin — still blank");
                 replans.add(new String[]{ cid, String.valueOf(it.optInt("idx")) });
             } else if (!allIds.contains(cid)) {
+                if (at < 0) continue;
                 if (tip - at < VANISHED_TTL) continue;
                 LocalStore.logEvent(ctx, row.optString("name") + ": released idx "
                         + it.optInt("idx") + " — reserved coin gone " + (tip - at)

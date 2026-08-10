@@ -716,12 +716,15 @@ function engineWatchStall(row, tip, done) {
   return true;
 }
 
-/* Re-post window for a reservation whose coin still sits blank: from here the
- * ONLY duplicate-proof cure is re-posting the SAME index onto the SAME coin —
+/* Re-posting a dead reservation is only ever done SAME index onto SAME coin —
  * a resurfacing original can then only double-spend that one coin, so the
- * chain keeps exactly one seal. Moving the index to a different blank would
- * let both confirm: a permanent duplicate under the locked contract. */
-var ENGINE_RESERVE_TTL = 12;
+ * chain keeps exactly one seal (moving the index to a different blank would
+ * let both confirm: a permanent duplicate under the locked contract). Same-
+ * pair re-posts are therefore safe at the ordinary 6-block per-coin spend-
+ * lock cadence (enginePendingOk); a deeper wait just throttled recovery to
+ * ~one seal per window. Batch-capped: a burst of competing TxPoWs starves
+ * itself down to about one confirmation per round (Maths, 2026-08-10). */
+var ENGINE_REPLAN_BATCH = 2;
 /* A reservation whose coin vanished entirely with its index unconfirmed can
  * only be freed after a far deeper wait — the txn that consumed the coin may
  * still surface its stamp. */
@@ -801,10 +804,10 @@ function enginePhaseStampCoins(row, tip, resList, done) {
           if (rv.at < 0) {
             fixes.push("UPDATE items SET reservedat=" + tip +
                        " WHERE collectionid=" + row.ID + " AND idx=" + rv.idx);
-          } else if (tip - rv.at >= ENGINE_RESERVE_TTL) {
+          }
+          if (enginePendingOk(rv.coinid, tip) && replans.length < ENGINE_REPLAN_BATCH) {
             MDS.log("collection " + row.ID + ": re-posting idx " + rv.idx +
-                    " onto its reserved coin - still blank " + (tip - rv.at) +
-                    " blocks after the stamp was posted");
+                    " onto its reserved coin - still blank");
             replans.push({ coinid: rv.coinid, idx: rv.idx });
           }
         } else if (!allIds[rv.coinid]) {
