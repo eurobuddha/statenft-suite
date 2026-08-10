@@ -1485,7 +1485,23 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 pickImages();
             });
             body.addView(pick, lph(48, 0, 0, 0, 10));
-            body.addView(Design.lot(this, "Proof sheet — what gets sealed"), lpm(0, 0, 0, 6));
+            boolean anyPlate = false;
+            for (String s : createImages) if (s != null && !s.isEmpty()) { anyPlate = true; break; }
+            if (anyPlate) {
+                TextView resetAll = Design.button(this, "Reset all plates", false);
+                resetAll.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                        .setTitle("Reset all plates")
+                        .setMessage("Clear every chosen image? The collection details stay — you just pick fresh images.")
+                        .setPositiveButton("Reset", (d, w) -> {
+                            saveCollectionDraft(name, desc, size, baseF[0], extF[0], iconF[0], extUrlF[0], webF[0]);
+                            createImages = new String[createImages.length];
+                            renderCreateCollection();
+                        })
+                        .setNegativeButton("Keep", null)
+                        .show());
+                body.addView(resetAll, lph(44, 0, 0, 0, 8));
+            }
+            body.addView(Design.lot(this, "Proof sheet — what gets sealed · tap a plate to edit, replace or clear"), lpm(0, 0, 0, 6));
             body.addView(imageSlotGrid(), lpm(0, 0, 0, 8));
         }
 
@@ -1614,15 +1630,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         String im = createImages[ii];
                         if (im == null || im.length() <= room) continue;
                         if ("image/svg+xml".equals(ImageTools.mimeOf(im))) {
-                            toast("item " + (ii + 1) + " (" + im.length() + "B SVG) cannot be "
+                            toast("plate " + (ii + 1) + " (" + im.length() + "B SVG) cannot be "
                                     + "shrunk to the " + room + "B image room the signed record "
-                                    + "leaves - lighten the record or use raster art");
+                                    + "leaves - lighten the record, or tap plate " + (ii + 1)
+                                    + " on the proof sheet to replace it");
                             return;
                         }
                         String out = ImageTools.recompressBase64(im, room);
                         if (out.isEmpty()) {
-                            toast("item " + (ii + 1) + " cannot be shrunk to the " + room
-                                    + "B image room - lighten the record");
+                            toast("plate " + (ii + 1) + " cannot be shrunk to the " + room
+                                    + "B image room - lighten the record, or tap plate "
+                                    + (ii + 1) + " on the proof sheet to replace it");
                             return;
                         }
                         createImages[ii] = out;
@@ -3154,10 +3172,27 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     toast("Vector plate — choose a replacement");
                     pickImage(idx);
                 } else {
-                    showEditor(createImages[idx], ImageTools.STATE_IMG_BUDGET, edited -> {
-                        createImages[idx] = edited;
-                        renderCreateCollection();
-                    });
+                    // a filled plate offers all three exits — crop-only trapped
+                    // an oversized pick with no way to swap it (2026-08-10)
+                    new android.app.AlertDialog.Builder(this)
+                            .setTitle("Plate " + String.format(Locale.US, "%02d", idx + 1))
+                            .setItems(new String[]{
+                                    "Edit — crop & tone",
+                                    "Replace — choose a different image",
+                                    "Clear this plate" }, (d, which) -> {
+                                if (which == 0) {
+                                    showEditor(createImages[idx], ImageTools.STATE_IMG_BUDGET, edited -> {
+                                        createImages[idx] = edited;
+                                        renderCreateCollection();
+                                    });
+                                } else if (which == 1) {
+                                    pickImage(idx);
+                                } else {
+                                    createImages[idx] = "";
+                                    renderCreateCollection();
+                                }
+                            })
+                            .show();
                 }
             } else pickImage(idx);
         });
