@@ -605,10 +605,12 @@ function enginePhaseStamp(row, tip, done) {
     var used = {};
     var blanks = [];
     var stamped = [];
+    var bigs = 0;
     for (var i = 0; i < coins.length; i++) {
       var idx = engineStamped(coins[i]);
       if (idx !== null) { used[idx] = true; stamped.push(coins[i]); }
       else if (coins[i].tokenamount === "1") { blanks.push(coins[i]); }
+      else if (parseInt(coins[i].tokenamount, 10) > 1) { bigs++; }
     }
     // Record stamped coinids on their item rows. Coin state is written by
     // whoever last spent the coin (legacy collections allow rewriting it), so
@@ -622,6 +624,16 @@ function enginePhaseStamp(row, tip, done) {
       var count = 0;
       for (var u in used) { if (used.hasOwnProperty(u)) { count++; } }
       if (count >= row.SIZE) { engineSetPhase(row, "DONE", done); return; }
+      // The 'Waiting for blank unit coins' deadlock (2026-08-10): dropped
+      // split txns can rewind the chain AFTER the phase advanced on their
+      // unconfirmed outputs, leaving unsealed units inside a fat change coin
+      // STAMP never looks at. Chain truth wins: go back and finish splitting.
+      if (blanks.length === 0 && bigs > 0) {
+        MDS.log("collection " + row.ID +
+                ": unsplit units found in STAMP - returning to SPLIT");
+        engineSetPhase(row, "SPLIT", done);
+        return;
+      }
 
       // next free indices
       var free = [];

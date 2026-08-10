@@ -379,12 +379,14 @@ public final class MintEngine {
         tokenCoins(node, row.optString("tokenid"), coins -> {
             HashSet<String> used = new HashSet<>();
             List<JSONObject> blanks = new ArrayList<>();
+            List<JSONObject> bigs = new ArrayList<>();
             for (int i = 0; i < coins.length(); i++) {
                 JSONObject c = coins.optJSONObject(i);
                 if (c == null) continue;
                 String idx = StateNft.stamped(c);
                 if (idx != null) used.add(idx);
                 else if ("1".equals(c.optString("tokenamount"))) blanks.add(c);
+                else if (parseInt(c.optString("tokenamount", "0")) > 1) bigs.add(c);
             }
             updateCoinIds(row, coins);
             // A depth-limited window can hide old stamps: merge the locally
@@ -392,6 +394,19 @@ public final class MintEngine {
             // sealed identity would be unrecoverable under the locked contract)
             mergeLocalStamps(row, used);
             if (used.size() >= row.optInt("size")) { setPhase(ctx, row, "DONE", done); return; }
+            // The 'Waiting for blank unit coins' deadlock (2026-08-10): dropped
+            // split txns can rewind the chain AFTER the phase advanced on their
+            // unconfirmed outputs, leaving the unsealed units inside a fat
+            // change coin that STAMP never looks at. Chain truth wins: unsplit
+            // coins present and no blanks -> go back and finish splitting.
+            if (blanks.isEmpty() && !bigs.isEmpty()) {
+                put(row, "splitretries", 0);
+                put(row, "splitunits", -1);
+                LocalStore.logEvent(ctx, row.optString("name")
+                        + ": unsplit units found in STAMP — returning to SPLIT");
+                setPhase(ctx, row, "SPLIT", done);
+                return;
+            }
             List<String> ready = new ArrayList<>();
             for (JSONObject c : blanks) {
                 String cid = c.optString("coinid");
