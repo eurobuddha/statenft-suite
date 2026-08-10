@@ -71,7 +71,7 @@ for f in art.js photo.js; do
   fi
 done
 FBRIDGE=android/app/src/main/assets/filtr
-for f in filtr-engine.js filtr.js styles.css; do
+for f in filtr-engine.js filtr.js filtr-tabs.js styles.css; do
   if diff -q "minidapp/$f" "$FBRIDGE/$f" >/dev/null 2>&1; then
     echo "  ok    $f byte-identical in the FILTR WebView assets"
   else
@@ -108,6 +108,22 @@ if ls ./*.zip >/dev/null 2>&1; then
   fail=1
 else
   echo "  ok    no unversioned build at repo root"
+fi
+# THE RULE, part two: the shipped zip must carry every file index.html loads.
+# (4.2.0/4.2.1 shipped WITHOUT filtr.js/filtr-engine.js — dead Filtr tab.)
+ZIP="releases/statenft-atelier-mds-$VER.zip"
+if [ -f "$ZIP" ]; then
+  zmiss=""
+  for f in $(grep -o 'src="[^"?]*' minidapp/index.html | sed 's/src="//') \
+           $(grep -o 'href="styles[^"?]*' minidapp/index.html | sed 's/href="//'); do
+    unzip -l "$ZIP" | awk '{print $4}' | grep -qx "$f" || zmiss="$zmiss $f"
+  done
+  if [ -n "$zmiss" ]; then
+    echo "  FAIL  $ZIP is missing files index.html loads:$zmiss"
+    fail=1
+  else
+    echo "  ok    $ZIP carries every file index.html loads"
+  fi
 fi
 echo
 

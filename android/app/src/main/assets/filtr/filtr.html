@@ -9,7 +9,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FILTR</title>
 <link rel="stylesheet" href="styles.css">
-<style>body { padding: 0.7rem; } .filtr-stage { height: 46vh; }</style>
+<style>
+  body { padding: 0.7rem; }
+  /* narrow layout (<=900px) takes its 38vh stage from styles.css */
+  @media (min-width: 901px) { .filtr-stage { height: 46vh; } }
+</style>
 </head>
 <body>
 <script>
@@ -50,7 +54,7 @@ function downloadBlob(name, data, mime) {
     </div>
     <div id="filtr-layout" class="filtr-layout">
       <div class="filtr-rail">
-        <div class="filtr-panel">
+        <div class="filtr-panel" id="filtr-panel-import">
           <p class="wizard-kick">Import</p>
           <label class="art-drop filtr-drop" id="filtr-drop">
             <span id="filtr-drop-hint">+ drop / tap to choose &middot; paste &#8984;V</span>
@@ -58,11 +62,11 @@ function downloadBlob(name, data, mime) {
           </label>
           <p class="filtr-meta mono" id="filtr-meta">no image loaded</p>
         </div>
-        <div class="filtr-panel">
+        <div class="filtr-panel" id="filtr-panel-effects">
           <p class="wizard-kick">Effects</p>
           <div id="filtr-fx-list"></div>
         </div>
-        <div class="filtr-panel">
+        <div class="filtr-panel" id="filtr-panel-presets">
           <p class="wizard-kick">Presets</p>
           <div id="filtr-presets" class="filtr-presets"></div>
         </div>
@@ -101,23 +105,23 @@ function downloadBlob(name, data, mime) {
         </div>
       </div>
       <div class="filtr-rail">
-        <div class="filtr-acc open">
+        <div class="filtr-acc open" id="filtr-acc-effect">
           <h4><span id="filtr-fx-name">Effect</span><span class="arr">&#9662;</span></h4>
           <div class="filtr-accbody" id="filtr-fx-controls"></div>
         </div>
-        <div class="filtr-acc open">
+        <div class="filtr-acc open" id="filtr-acc-adjust">
           <h4>Adjustments<span class="arr">&#9662;</span></h4>
           <div class="filtr-accbody" id="filtr-adjust-controls"></div>
         </div>
-        <div class="filtr-acc">
+        <div class="filtr-acc" id="filtr-acc-post">
           <h4>Post FX<span class="arr">&#9662;</span></h4>
           <div class="filtr-accbody" id="filtr-post-controls"></div>
         </div>
-        <div class="filtr-acc">
+        <div class="filtr-acc" id="filtr-acc-annotate">
           <h4>Annotate<span class="arr">&#9662;</span></h4>
           <div class="filtr-accbody" id="filtr-annotate-controls"></div>
         </div>
-        <div class="filtr-acc open">
+        <div class="filtr-acc open" id="filtr-acc-save">
           <h4>Save<span class="arr">&#9662;</span></h4>
           <div class="filtr-accbody">
             <button class="btn btn-gold filtr-savebtn" id="filtr-save-mint">Send to NFT mint &rarr;</button>
@@ -130,10 +134,23 @@ function downloadBlob(name, data, mime) {
           </div>
         </div>
       </div>
+      <!-- narrow-viewport tab strip: CSS shows it only <=900px; on desktop the
+           three-column layout above renders exactly as before -->
+      <div id="filtr-tabs" class="filtr-tabs">
+        <button id="filtr-tab-import" class="filtr-tab on" data-pane="filtr-panel-import">Import</button>
+        <button id="filtr-tab-presets" class="filtr-tab" data-pane="filtr-panel-presets">Presets</button>
+        <button id="filtr-tab-effects" class="filtr-tab" data-pane="filtr-panel-effects">Effects</button>
+        <button id="filtr-tab-tune" class="filtr-tab" data-pane="filtr-acc-effect">Tune</button>
+        <button id="filtr-tab-adjust" class="filtr-tab" data-pane="filtr-acc-adjust">Adjust</button>
+        <button id="filtr-tab-post" class="filtr-tab" data-pane="filtr-acc-post">Post FX</button>
+        <button id="filtr-tab-annotate" class="filtr-tab" data-pane="filtr-acc-annotate">Annotate</button>
+        <button id="filtr-tab-save" class="filtr-tab" data-pane="filtr-acc-save">Save</button>
+      </div>
     </div>
   </section>
 <script src="filtr-engine.js"></script>
 <script src="filtr.js"></script>
+<script src="filtr-tabs.js"></script>
 <script>filtrEnter();</script>
 </body>
 </html>

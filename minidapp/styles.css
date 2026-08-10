@@ -814,7 +814,41 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
 .filtr-postrow input { accent-color: var(--verm); }
 .filtr-postsub { padding-left: 0.4rem; border-left: 2px solid var(--soft); margin-bottom: 0.4rem; }
 .filtr-savebtn { width: 100%; margin-bottom: 0.4rem; text-align: center; }
+/* Tab strip lives in the markup always; only the narrow layout shows it. */
+.filtr-tabs { display: none; }
+.filtr-tab {
+  border: 1.5px solid var(--ink); background: var(--card); cursor: pointer;
+  font: 800 0.62rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 0.5rem 0.7rem; white-space: nowrap; flex: 0 0 auto;
+}
+.filtr-tab.on { background: var(--ink); color: #fff; }
+
 @media (max-width: 900px) {
-  .filtr-layout { grid-template-columns: 1fr; }
-  .filtr-stage { height: 52vh; }
+  /* Narrow: the image stage stays pinned on top while ONE pane at a time
+     shows beneath it, flicked via the sticky bottom tab bar. The desktop
+     three-column layout above is untouched. */
+  .filtr-layout { display: flex; flex-direction: column; gap: 0.7rem; }
+  .filtr-center {
+    order: 0; position: sticky; top: 0; z-index: 40;
+    background: var(--paper); padding-bottom: 0.3rem;
+  }
+  .filtr-stage { height: 38vh; }
+  .filtr-center .filtr-toolbar { flex-wrap: nowrap; overflow-x: auto; }
+  .filtr-rail { order: 1; }
+  .filtr-tabs {
+    order: 2; display: flex; gap: 0.3rem;
+    position: sticky; bottom: 0; z-index: 40;
+    background: var(--paper); border-top: 2px solid var(--ink);
+    padding: 0.5rem 0.1rem 0.6rem; overflow-x: auto;
+  }
+  /* exactly one pane visible — the one the tab bar marked .ftab-on */
+  .filtr-rail > .filtr-panel, .filtr-rail > .filtr-acc { display: none; }
+  .filtr-rail > .ftab-on { display: block; }
+  /* an active accordion renders as a plain panel: tab is its header */
+  .filtr-acc.ftab-on h4 { display: none; }
+  .filtr-acc.ftab-on .filtr-accbody { display: block; padding: 0; }
+  .filtr-acc.ftab-on {
+    border: 2px solid var(--ink); box-shadow: var(--shadow-sm);
+    background: var(--card); padding: 0.8rem; margin: 0;
+  }
 }
