@@ -831,6 +831,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     private void openCollection(StateNft.Meta m) {
         if (m == null) { renderGallery(); return; }
+        selfHealed = false;
         setScreen(Screen.COLLECTION, this::renderGallery);
         appbar(m.name, true, false);
         bottomNav(0);
@@ -883,9 +884,34 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         LocalStore.upsert(this, row);
     }
 
+    /* A row marked DONE while the chain still shows unsealed lots is the
+     * false-DONE of 2026-08-10 (reserved-but-dropped stamps counted as seals):
+     * re-point the engine at the chain and let it finish. Once per visit. */
+    private boolean selfHealed = false;
+
+    private void maybeSelfHeal(StateNft.Meta m) {
+        if (selfHealed || m == null || !m.created || m.size <= 0) return;
+        if (!"DONE".equals(m.phase) || m.minted >= m.size) return;
+        JSONObject row = LocalStore.findById(this, m.localId);
+        if (row == null) row = LocalStore.findByTokenid(this, m.tokenid);
+        if (row == null) return;
+        selfHealed = true;
+        LocalStore.logEvent(this, m.name + ": marked DONE but chain shows " + m.minted
+                + "/" + m.size + " sealed — self-recovering");
+        toast("Chain shows " + m.minted + "/" + m.size + " — resuming this mint");
+        MintEngine.recover(this, node, row, lastTip, msg -> runOnUiThread(() -> {
+            engageEngine();
+            loadLocalCollections();
+            openMeta = findCollectionByLocalId(m.localId, m);
+            lastDetailSig = "";
+            refreshDetail();
+        }));
+    }
+
     private void renderDetail() {
         StateNft.Meta m = openMeta;
         if (m == null || screen != Screen.COLLECTION) return;
+        maybeSelfHeal(m);
         // 25s engine ticks re-enter here: skip the full view-tree rebuild
         // (and its mid-scroll stutter) when nothing user-visible changed
         JSONObject dropState = AirdropEngine.job(this, m.localId);

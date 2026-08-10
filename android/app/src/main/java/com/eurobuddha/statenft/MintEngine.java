@@ -39,7 +39,8 @@ public final class MintEngine {
         }
         JSONObject row = rows.optJSONObject(i);
         String phase = row == null ? "DONE" : row.optString("phase", "DONE");
-        if (row == null || "DONE".equals(phase) || "BURIED".equals(phase) || "BURY".equals(phase)) {
+        if (row == null || "DONE".equals(phase) || "DAMAGED".equals(phase)
+                || "BURIED".equals(phase) || "BURY".equals(phase)) {
             tickRow(ctx, node, rows, i + 1, tip, acted, done);
             return;
         }
@@ -402,7 +403,6 @@ public final class MintEngine {
                 if (amt >= 0.9999 && amt <= 1.0001) blankN++;
                 else if (amt > 1.0001) bigN++;
             }
-            mergeLocalStamps(row, used);
             // one-line forensic dump so a stalled mint can be diagnosed from
             // the Engine Log alone (amount|port-0 value per coin)
             StringBuilder dump = new StringBuilder();
@@ -414,15 +414,13 @@ public final class MintEngine {
                     .append(String.valueOf(StateNft.state(c, 0)));
             }
             LocalStore.logEvent(ctx, row.optString("name") + ": COINS " + dump);
-            String phase;
-            if (used.size() >= row.optInt("size")) phase = "DONE";
-            else if (bigN > 0) phase = "SPLIT";
-            else if (blankN > 0) phase = "STAMP";
-            else if (coins.length() == 0) phase = "MOVE";
-            else phase = "STAMP";
+            // Chain-confirmed distinct seals ONLY — reservations must never
+            // count toward DONE (the Maths 14/20 false-DONE, 2026-08-10)
+            String phase = classifyStamp(used.size(), row.optInt("size"), blankN, bigN, coins.length());
             LocalStore.logEvent(ctx, row.optString("name") + ": RECOVER — chain shows "
-                    + coins.length() + " coins (" + stampedN + " sealed, " + blankN
-                    + " blank, " + bigN + " unsplit) -> " + phase);
+                    + coins.length() + " coins (" + used.size() + " distinct of " + stampedN
+                    + " sealed, " + blankN + " blank, " + bigN + " unsplit) -> " + phase);
+            if ("DAMAGED".equals(phase)) { setDamaged(ctx, row, used.size(), coins.length(), done); return; }
             setPhase(ctx, row, phase, done);
         }, e -> {
             LocalStore.logEvent(ctx, row.optString("name") + ": RECOVER could not read coins: " + e);
@@ -466,17 +464,20 @@ public final class MintEngine {
                 else if (amt > 1.0001) bigs.add(c);
             }
             updateCoinIds(row, coins);
-            // A depth-limited window can hide old stamps: merge the locally
-            // recorded ones so the planner never re-issues an index (a duplicate
-            // sealed identity would be unrecoverable under the locked contract)
-            mergeLocalStamps(row, used);
-            if (used.size() >= row.optInt("size")) { setPhase(ctx, row, "DONE", done); return; }
+            // DONE takes CHAIN-CONFIRMED seals only. Reservations are hopes,
+            // not facts: counting them here marked Maths DONE at 14/20 real
+            // seals when 6 reserved stamp txns died in a rewind (2026-08-10),
+            // hiding every recovery control while 6 blanks sat waiting.
+            String verdict = classifyStamp(used.size(), row.optInt("size"),
+                    blanks.size(), bigs.size(), coins.length());
+            if ("DONE".equals(verdict)) { setPhase(ctx, row, "DONE", done); return; }
+            if ("DAMAGED".equals(verdict)) { setDamaged(ctx, row, used.size(), coins.length(), done); return; }
             // The 'Waiting for blank unit coins' deadlock (2026-08-10): dropped
             // split txns can rewind the chain AFTER the phase advanced on their
             // unconfirmed outputs, leaving the unsealed units inside a fat
             // change coin that STAMP never looks at. Chain truth wins: unsplit
             // coins present and no blanks -> go back and finish splitting.
-            if (blanks.isEmpty() && !bigs.isEmpty()) {
+            if ("SPLIT".equals(verdict)) {
                 put(row, "splitretries", 0);
                 put(row, "splitunits", -1);
                 LocalStore.logEvent(ctx, row.optString("name")
@@ -484,12 +485,23 @@ public final class MintEngine {
                 setPhase(ctx, row, "SPLIT", done);
                 return;
             }
+            // Dead reservations get re-posted onto their own coins (duplicate-
+            // proof by double-spend); vanished ones release after a deep TTL.
+            // Then merge the surviving reservations so the planner never
+            // re-issues a live index. (A depth-limited window can hide old
+            // stamps: the merge also keeps those off the free list.)
+            List<String[]> replans = replanDeadReservations(ctx, row, used, blanks, coins, tip);
+            mergeLocalStamps(row, used);
+            HashSet<String> replanCids = new HashSet<>();
+            for (String[] r : replans) replanCids.add(r[0]);
             List<String> ready = new ArrayList<>();
             for (JSONObject c : blanks) {
                 String cid = c.optString("coinid");
-                if (LocalStore.pendingOk(ctx, cid, tip)) ready.add(cid);
+                if (!replanCids.contains(cid) && LocalStore.pendingOk(ctx, cid, tip)) ready.add(cid);
             }
-            if (ready.isEmpty()) {
+            List<String[]> plan = new ArrayList<>(replans);
+            plan.addAll(planAssignments(ready, used, row.optInt("size")));
+            if (plan.isEmpty()) {
                 LocalStore.upsert(ctx, row);
                 // Say what the engine SEES — a bare "waiting" hid a coin-query
                 // blind spot for hours (2026-08-10)
@@ -497,11 +509,10 @@ public final class MintEngine {
                         ? "No blank units in view (coins " + coins.length()
                           + ", sealed " + used.size() + "/" + row.optInt("size")
                           + ", unsplit " + bigs.size() + ") — tap Recover mint"
-                        : "Stamps confirming…");
+                        : (ready.isEmpty() ? "Stamps confirming…"
+                                           : "All indices assigned — waiting for confirmations"));
                 return;
             }
-            List<String[]> plan = planAssignments(ready, used, row.optInt("size"));
-            if (plan.isEmpty()) { LocalStore.upsert(ctx, row); done.done("All indices assigned — waiting for confirmations"); return; }
             stampNext(ctx, node, row, tip, plan, 0, done);
         }, e -> setError(ctx, row, e, done));
     }
@@ -549,7 +560,7 @@ public final class MintEngine {
          * four coins). mergeLocalStamps() reads these reservations, so an
          * index can never be issued twice, confirmed or not. Under the locked
          * contract a duplicate seal is permanent, so this must hold. */
-        reserveIndex(ctx, row, idx, coinid);
+        reserveIndex(ctx, row, idx, coinid, tip);
         String id = "st" + row.optLong("id") + "x" + idx;
         List<String> steps = new ArrayList<>();
         steps.add("txninput id:" + id + " coinid:" + coinid);
@@ -902,12 +913,15 @@ public final class MintEngine {
     }
 
     /** Durably claim item #idx for this coin (pre-post reservation). */
-    private static void reserveIndex(Context ctx, JSONObject row, int idx, String coinid) {
+    private static void reserveIndex(Context ctx, JSONObject row, int idx, String coinid, int tip) {
         JSONArray items = localItems(row);
         for (int j = 0; j < items.length(); j++) {
             JSONObject it = items.optJSONObject(j);
             if (it != null && it.optInt("idx") == idx) {
                 if (it.optString("coinid", "").isEmpty()) put(it, "coinid", coinid);
+                // refresh the TTL clock on a re-post of the same pair so the
+                // next re-post waits a full TTL again
+                if (coinid.equals(it.optString("coinid", ""))) put(it, "reservedat", tip);
                 LocalStore.upsert(ctx, row);
                 return;
             }
@@ -915,9 +929,95 @@ public final class MintEngine {
         JSONObject it = new JSONObject();
         put(it, "idx", idx);
         put(it, "coinid", coinid);
+        put(it, "reservedat", tip);
         items.put(it);
         put(row, "items", items);
         LocalStore.upsert(ctx, row);
+    }
+
+    /** Chain-truth verdict for the stamp machinery. `distinct` counts indices
+     *  CONFIRMED on-chain only — never reservations. */
+    static String classifyStamp(int distinct, int size, int blanks, int bigs, int coins) {
+        if (distinct >= size) return "DONE";
+        if (coins == 0) return "MOVE";
+        if (blanks == 0 && bigs == 0 && coins >= size) return "DAMAGED";
+        if (blanks == 0 && bigs > 0) return "SPLIT";
+        return "STAMP";
+    }
+
+    /** Terminal honest state for pre-reservation duplicate seals: every coin
+     *  is stamped but distinct designs fall short — under the locked contract
+     *  a duplicate seal is permanent, so the collection can never complete.
+     *  The lots stay valid, sendable and buriable; the engine stops churning. */
+    private static void setDamaged(Context ctx, JSONObject row, int distinct, int coins, Done done) {
+        int size = row.optInt("size");
+        String msg = "DAMAGED: all " + coins + " coins are sealed but only " + distinct + " of "
+                + size + " designs are distinct — " + (coins - distinct)
+                + " coins carry duplicate seals (minted before the duplicate-seal fix), which the "
+                + "locked contract makes permanent. The sealed lots remain valid, sendable and "
+                + "buriable; the collection can never reach " + size + " distinct lots.";
+        LocalStore.logEvent(ctx, row.optString("name") + ": " + msg);
+        put(row, "phase", "DAMAGED");
+        put(row, "error", msg);
+        put(row, "stallticks", 0);
+        LocalStore.upsert(ctx, row);
+        done.done(msg);
+    }
+
+    /** A reservation is DEAD when its index never confirmed and its reserved
+     *  coin still sits unspent among the blanks RESERVE_TTL blocks after the
+     *  reservation was taken. The ONLY duplicate-proof cure is re-posting the
+     *  SAME index onto the SAME coin: if the original txn ever resurfaces,
+     *  both spend one coin and the chain keeps exactly one seal. Moving the
+     *  index to a different blank would let both confirm — a permanent
+     *  duplicate under the locked contract. Reservations without a recorded
+     *  tip (pre-0.5.3 rows) get stamped with the current tip and wait a full
+     *  TTL from now. Returns [coinid, idx] pairs to re-post this tick. */
+    private static final int RESERVE_TTL = 12;
+    /** A reservation whose coin has vanished from the coin set entirely with
+     *  its index still unconfirmed can only be freed after a much deeper wait
+     *  — the txn that consumed the coin may still surface its stamp. */
+    private static final int VANISHED_TTL = 60;
+
+    static List<String[]> replanDeadReservations(Context ctx, JSONObject row, HashSet<String> chainUsed,
+                                                 List<JSONObject> blanks, JSONArray coins, int tip) {
+        JSONArray items = localItems(row);
+        HashSet<String> blankIds = new HashSet<>();
+        for (JSONObject b : blanks) blankIds.add(b.optString("coinid"));
+        HashSet<String> allIds = new HashSet<>();
+        for (int i = 0; i < coins.length(); i++) {
+            JSONObject c = coins.optJSONObject(i);
+            if (c != null) allIds.add(c.optString("coinid"));
+        }
+        List<String[]> replans = new ArrayList<>();
+        boolean changed = false;
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it == null) continue;
+            String cid = it.optString("coinid", "");
+            if (cid.isEmpty()) continue;
+            if (chainUsed.contains(String.valueOf(it.optInt("idx")))) continue;
+            int at = it.optInt("reservedat", -1);
+            if (at < 0) { put(it, "reservedat", tip); changed = true; continue; }
+            if (blankIds.contains(cid)) {
+                if (tip - at < RESERVE_TTL) continue;
+                LocalStore.logEvent(ctx, row.optString("name") + ": re-posting idx "
+                        + it.optInt("idx") + " onto its reserved coin — still blank "
+                        + (tip - at) + " blocks after the stamp was posted");
+                replans.add(new String[]{ cid, String.valueOf(it.optInt("idx")) });
+            } else if (!allIds.contains(cid)) {
+                if (tip - at < VANISHED_TTL) continue;
+                LocalStore.logEvent(ctx, row.optString("name") + ": released idx "
+                        + it.optInt("idx") + " — reserved coin gone " + (tip - at)
+                        + " blocks with no seal in sight");
+                it.remove("coinid");
+                it.remove("reservedat");
+                changed = true;
+            }
+            // coin visible but neither blank nor stamped-with-our-idx: leave it
+        }
+        if (changed) { put(row, "items", items); LocalStore.upsert(ctx, row); }
+        return replans;
     }
 
     private static void updateCoinIds(JSONObject row, JSONArray coins) {

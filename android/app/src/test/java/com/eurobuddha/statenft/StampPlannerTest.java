@@ -69,4 +69,28 @@ public class StampPlannerTest {
         HashSet<String> full = new HashSet<>(Arrays.asList("1", "2"));
         assertTrue(MintEngine.planAssignments(Arrays.asList("c"), full, 2).isEmpty());
     }
+
+    /* DONE takes chain-confirmed seals ONLY. Counting reservations marked
+     * Maths DONE at 14/20 real seals (2026-08-10) while six blanks waited. */
+    @Test public void doneRequiresChainConfirmedSeals() {
+        // classifyStamp(distinctOnChain, size, blanks, bigs, coins)
+        assertEquals("DONE",    MintEngine.classifyStamp(20, 20, 0, 0, 20));
+        assertEquals("STAMP",   MintEngine.classifyStamp(14, 20, 6, 0, 20)); // Maths: NOT done
+        assertEquals("STAMP",   MintEngine.classifyStamp(0, 20, 20, 0, 20));
+        assertEquals("SPLIT",   MintEngine.classifyStamp(10, 20, 0, 1, 11));
+        assertEquals("MOVE",    MintEngine.classifyStamp(0, 20, 0, 0, 0));
+    }
+
+    /* All coins sealed but distinct short = permanent duplicate seals under
+     * the locked contract (math 9/20, abstract thought forms 8/20). Terminal:
+     * the engine must stop churning instead of flip-flopping STAMP<->RECOVER. */
+    @Test public void duplicateSealsClassifyAsDamagedNotStamp() {
+        assertEquals("DAMAGED", MintEngine.classifyStamp(9, 20, 0, 0, 20));
+        assertEquals("DAMAGED", MintEngine.classifyStamp(8, 20, 0, 0, 20));
+        // a partial coin window (fewer coins than size) must NOT read as damage
+        assertEquals("STAMP",   MintEngine.classifyStamp(9, 20, 0, 0, 12));
+        // blanks or unsplit coins present -> still workable, never damaged
+        assertEquals("STAMP",   MintEngine.classifyStamp(9, 20, 1, 0, 20));
+        assertEquals("SPLIT",   MintEngine.classifyStamp(9, 20, 0, 2, 20));
+    }
 }
