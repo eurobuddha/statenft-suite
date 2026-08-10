@@ -230,8 +230,11 @@ public final class ImageTools {
     /* Resolution-first WebP search: WebP buys ~30% quality per byte over
      * JPEG, and for photos a larger plate at moderate quality reads better
      * than a small plate at high quality. First fit at the LARGEST dim wins. */
-    private static final int[] DIMS = {1080, 900, 720, 560, 420, 300};
-    private static final int[] QUALITIES = {88, 78, 68, 60};
+    /* The ladder MUST reach the floor: a 300px/q60 stop left busy photos at
+     * ~8-16K b64 — "cannot be shrunk" refusals for budgets a 180px rung fits
+     * easily (2026-08-10, Trois Jours à Paris plate 1). Raster always fits. */
+    private static final int[] DIMS = {1080, 900, 720, 560, 420, 300, 240, 180, 140};
+    private static final int[] QUALITIES = {88, 78, 68, 60, 50, 42};
 
     private static String compressBitmap(Bitmap src, int budget) {
         for (int dim : DIMS) {

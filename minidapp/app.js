@@ -1260,8 +1260,10 @@ function reshrinkB64(b64, budget, cb) {
   if (b64Mime(b64) === "image/svg+xml") { cb(null); return; }
   var img = new Image();
   img.onload = function () {
-    var dims = [1080, 900, 720, 560, 420, 300, 240, 180];
-    var quals = [0.85, 0.75, 0.65, 0.55, 0.45];
+    /* the ladder must reach the floor — a high stop meant "cannot be shrunk"
+     * refusals for budgets a smaller rung fits easily (raster always fits) */
+    var dims = [1080, 900, 720, 560, 420, 300, 240, 180, 140];
+    var quals = [0.85, 0.75, 0.65, 0.55, 0.45, 0.38];
     for (var d = 0; d < dims.length; d++) {
       var s = Math.min(1, dims[d] / Math.max(img.width, img.height));
       for (var q = 0; q < quals.length; q++) {
@@ -1329,20 +1331,38 @@ function mintCollection() {
   /* FIT-then-refuse: real name/desc/URLs land here and can outweigh any
    * earlier estimate — run the icon ladder (slim -> drop) before refusing. */
   function iconLadder(cb) {
+    /* The icon must never starve the plates: an embedded icon inside the
+     * record squeezes every plate's image room. Slim/drop it whenever the
+     * plates need more room than it leaves — not only when the record fails
+     * outright (2026-08-10). A plate deserves PLATE_MIN room; plates already
+     * lighter than that never force the icon out. */
+    var PLATE_MIN = 6500;
+    var need = 0;
+    if (mode === "embed") {
+      for (var wn = 0; wn < size; wn++) {
+        if (WIZ_IMAGES[wn]) {
+          need = Math.max(need, Math.min(WIZ_IMAGES[wn].length, PLATE_MIN));
+        }
+      }
+    }
+    function happy(env) { return env.ok && env.imageBudget >= need; }
     var env = engineEnvelope(JSON.stringify(
       artExactMeta(name, desc, size, icon, externalurl, null)).length);
-    if (env.ok) { cb(env); return; }
+    if (happy(env)) { cb(env); return; }
     var raw = (icon && icon.indexOf("http") !== 0)
       ? icon.replace(/<\/artimage>$/, "") : "";
-    if (!raw) { status.innerText = env.error; cb(null); return; }
+    if (!raw) {
+      if (env.ok) { cb(env); return; }   // hosted/no icon: nothing to shed
+      status.innerText = env.error; cb(null); return;
+    }
     reshrinkB64(raw, 2000, function (slim) {
       if (slim) {
         var icon2 = slim + "</artimage>";
         var e2 = engineEnvelope(JSON.stringify(
           artExactMeta(name, desc, size, icon2, externalurl, null)).length);
-        if (e2.ok) {
+        if (happy(e2)) {
           icon = icon2;
-          toast("icon slimmed so the collection signs");
+          toast("icon slimmed so the plates keep their room");
           cb(e2); return;
         }
       }
@@ -1350,7 +1370,7 @@ function mintCollection() {
       var e3 = engineEnvelope(JSON.stringify(
         artExactMeta(name, desc, size, "", externalurl, null)).length);
       if (e3.ok) {
-        toast("icon dropped so the collection signs — wallet shows the identicon");
+        toast("icon dropped so the plates keep their room — wallet shows the identicon");
         cb(e3); return;
       }
       status.innerText = e3.error + " — even without an icon; shorten the description";

@@ -108,6 +108,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private String tokName = "", tokTicker = "", tokSupply = "1000000", tokDecimals = "0", tokDesc = "", tokUrl = "";
     private String tokIcon = "";        // embedded wallet icon (b64, ICON_BUDGET)
     private String createIconB64 = ""; // embedded collection icon (b64, ICON_BUDGET)
+    /** A plate deserves at least this much image room before the icon may keep
+     *  its full weight — ~420px of busy WEBP; plates above it just shrink. */
+    private static final int PLATE_MIN_ROOM = 6500;
     private boolean tokBusy = false;
     private final ArrayList<String[]> tokPairs = new ArrayList<>();
     private String pairKeyDraft = "", pairValueDraft = "";
@@ -1602,7 +1605,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     if (collectionItemTraits != null && collectionItemTraits.length() > 0)
                         put(metaJ, "traits", collectionItemTraits);
                     int room = MintEngine.imageBudget(metaJ.toString().length());
-                    if (room < 0 && !m.icon.isEmpty() && !m.icon.startsWith("http")) {
+                    /* The icon must never starve the plates: an embedded icon
+                     * (up to 6000 chars, incl. the silent plate-1 fallback)
+                     * inside the record squeezed every plate to ~4K — below
+                     * even the deep ladder's comfort. Slim/drop the icon
+                     * whenever the plates need more room than it leaves, not
+                     * only when the record fails outright (2026-08-10). */
+                    int need = 0;
+                    for (String im0 : createImages) {
+                        if (im0 != null) need = Math.max(need, Math.min(im0.length(), PLATE_MIN_ROOM));
+                    }
+                    if (room < need && !m.icon.isEmpty() && !m.icon.startsWith("http")) {
                         String slim = ImageTools.recompressBase64(m.icon, 2000);
                         if (!slim.isEmpty()) {
                             m.icon = slim;
@@ -1610,15 +1623,15 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                             if (collectionItemTraits != null && collectionItemTraits.length() > 0)
                                 put(metaJ, "traits", collectionItemTraits);
                             room = MintEngine.imageBudget(metaJ.toString().length());
-                            if (room >= 0) toast("icon slimmed so the collection signs");
+                            if (room >= need) toast("icon slimmed so the plates keep their room");
                         }
-                        if (room < 0) {
+                        if (room < need) {
                             m.icon = "";
                             metaJ = StateNft.tokenMetadata(m);
                             if (collectionItemTraits != null && collectionItemTraits.length() > 0)
                                 put(metaJ, "traits", collectionItemTraits);
                             room = MintEngine.imageBudget(metaJ.toString().length());
-                            if (room >= 0) toast("icon dropped so the collection signs — wallet shows the identicon");
+                            if (room >= 0) toast("icon dropped so the plates keep their room — wallet shows the identicon");
                         }
                     }
                     if (room < 0) {
