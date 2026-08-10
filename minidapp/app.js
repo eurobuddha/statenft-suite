@@ -644,6 +644,10 @@ function renderCards(coins, mineIds) {
   var burying = OPEN_ROW && OPEN_ROW.PHASE === "BURY";
   $("danger-row").classList.toggle("hidden", !OPEN_ROW || burying);
   $("bury-btn").classList.toggle("hidden", !(rawMine > 0));
+  /* Recover is offered while a mint of ours is still unfinished */
+  $("recover-btn").classList.toggle("hidden",
+    !(OPEN_ROW && parseInt(OPEN_ROW.ISCREATOR, 10) === 1 && OPEN_ROW.PHASE &&
+      OPEN_ROW.PHASE !== "DONE" && OPEN_ROW.PHASE !== "BURIED"));
   $("sendall-btn").classList.toggle("hidden", !(rawMine > 0));
   $("remove-btn").classList.toggle("hidden", rawMine > 0);
   $("holdings").classList.remove("hidden");
@@ -1521,6 +1525,25 @@ function onIconPick(e) {
 }
 $("icon-file").onchange = onIconPick;
 $("mint-btn").onclick = mintCollection;
+$("recover-btn").onclick = function () {
+  if (!OPEN_ROW) { return; }
+  var cid = OPEN_ROW.ID;
+  toast("reading the chain\u2026");
+  MDS.cmd("block", function (br) {
+    var tip = br.status && br.response ? parseInt(br.response.block, 10) : 0;
+    MDS.sql("SELECT * FROM collections WHERE id=" + cid, function (r) {
+      if (!r.status || !r.rows.length) { toast("no local mint row"); return; }
+      var row = r.rows[0];
+      row.SIZE = parseInt(row.SIZE, 10);
+      engineRecover(row, tip, function () {
+        toast("mint recovered - phase re-derived from the chain");
+        MDS.comms.solo("mint", function () {});
+        loadCollectionList();
+      });
+    });
+  });
+};
+
 $("bury-btn").onclick = openBuryModal;
 $("remove-btn").onclick = removeFromList;
 $("bury-cancel").onclick = closeBuryModal;

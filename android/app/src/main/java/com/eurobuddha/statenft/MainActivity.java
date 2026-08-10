@@ -972,6 +972,25 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 refreshDetail();
             });
             actions.addView(resume, weight(46, 4, 4));
+            /* Recover: re-derive this mint's phase from the chain (clears
+             * local locks and counters, posts nothing) — the manual twin of
+             * the stall watchdog. */
+            TextView doctor = Design.button(this, "Recover mint", false);
+            doctor.setOnClickListener(v -> {
+                JSONObject row = LocalStore.findById(this, m.localId);
+                if (row == null) row = LocalStore.findByTokenid(this, m.tokenid);
+                if (row == null) { toast("No local mint row to recover"); return; }
+                toast("Reading the chain…");
+                MintEngine.recover(this, node, row, lastTip, msg -> runOnUiThread(() -> {
+                    toast(msg);
+                    engageEngine();
+                    loadLocalCollections();
+                    openMeta = findCollectionByLocalId(m.localId, m);
+                    lastDetailSig = "";
+                    refreshDetail();
+                }));
+            });
+            actions.addView(doctor, weight(46, 4, 4));
         }
         TextView bury = Design.button(this, "Bury", false);
         bury.setOnClickListener(v -> renderBury());

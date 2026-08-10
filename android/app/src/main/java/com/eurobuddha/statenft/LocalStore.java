@@ -70,6 +70,12 @@ public final class LocalStore {
         return tip - p.optInt(coinid, 0) >= 6;
     }
 
+    /** Drop every pending spend lock — used by mint recovery so a stalled row
+     *  can re-attempt immediately instead of waiting out TTLs. */
+    public static void clearPending(Context c) {
+        prefs(c).edit().putString(KEY_PENDING, "{}").apply();
+    }
+
     public static void prunePending(Context c, int tip) {
         JSONObject p = pending(c);
         JSONArray names = p.names();

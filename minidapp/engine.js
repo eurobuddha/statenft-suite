@@ -600,6 +600,67 @@ function engineSplitBatch(defLen) {
   return Math.max(1, Math.min(3, defs - 2));
 }
 
+/* Recovery for a stalled mint: forget local locks/counters and re-derive the
+ * phase from what the chain actually holds. Posts nothing — it only re-points
+ * the state machine at reality. Driven by the Recover button and the stall
+ * watchdog below. */
+function engineRecover(row, tip, done) {
+  ENGINE_PENDING = {};
+  if (!row.TOKENID) {
+    MDS.sql("UPDATE collections SET posted=0, error='', splitretries=0, " +
+            "splitunits=-1 WHERE id=" + row.ID, function () {
+      engineSetPhase(row, "CREATE", done);
+    });
+    return;
+  }
+  engineTokenCoins(row.TOKENID, function (coins) {
+    var used = {}, stampedN = 0, blankN = 0, bigN = 0, i;
+    for (i = 0; i < coins.length; i++) {
+      var idx = engineStamped(coins[i]);
+      if (idx !== null) { used[idx] = true; stampedN++; }
+      else if (coins[i].tokenamount === "1") { blankN++; }
+      else if (parseInt(coins[i].tokenamount, 10) > 1) { bigN++; }
+    }
+    var count = 0;
+    for (var u in used) { if (used.hasOwnProperty(u)) { count++; } }
+    var phase = count >= row.SIZE ? "DONE"
+              : bigN > 0 ? "SPLIT"
+              : blankN > 0 ? "STAMP"
+              : coins.length === 0 ? "MOVE" : "STAMP";
+    MDS.log("collection " + row.ID + ": RECOVER - chain shows " + coins.length +
+            " coins (" + stampedN + " sealed, " + blankN + " blank, " + bigN +
+            " unsplit) -> " + phase);
+    MDS.sql("UPDATE collections SET error='', splitretries=0, splitunits=-1 " +
+            "WHERE id=" + row.ID, function () {
+      engineSetPhase(row, phase, done);
+    });
+  }, function (e) {
+    engineSetError(row, "recover could not read the chain: " + e, done);
+  });
+}
+
+/* Stall watchdog: a row that reports the same phase with no new stamps for
+ * ENGINE_STALL_TICKS ticks recovers itself. Progress resets the counter, so
+ * healthy slow mints never trip it. */
+var ENGINE_STALL_TICKS = 8;
+var ENGINE_STALL = {};   // collectionid -> {sig, ticks}
+
+function engineWatchStall(row, tip, done) {
+  var sig = row.PHASE + "|" + (row.MINTED || 0);
+  var st = ENGINE_STALL[row.ID];
+  if (!st || st.sig !== sig) {
+    ENGINE_STALL[row.ID] = { sig: sig, ticks: 0 };
+    return false;
+  }
+  st.ticks++;
+  if (st.ticks < ENGINE_STALL_TICKS) { return false; }
+  st.ticks = 0;
+  MDS.log("collection " + row.ID + ": no progress for " +
+          ENGINE_STALL_TICKS + " ticks - self-recovering");
+  engineRecover(row, tip, done);
+  return true;
+}
+
 function enginePhaseStamp(row, tip, done) {
   engineTokenCoins(row.TOKENID, function (coins) {
     var used = {};
@@ -782,6 +843,8 @@ function engineTick(cb) {
             row.SIZE = parseInt(row.SIZE, 10);
             row.POSTED = parseInt(row.POSTED, 10);
             var ph = row.PHASE;
+            if (ph !== "DONE" && ph !== "BURIED" && ph !== "NEEDIMAGES" &&
+                engineWatchStall(row, tip, next)) { return; }
             if (ph === "CREATE") { enginePhaseCreate(row, tip, next); }
             else if (ph === "MOVE") { enginePhaseMove(row, tip, next); }
             else if (ph === "SPLIT") { enginePhaseSplit(row, tip, next); }

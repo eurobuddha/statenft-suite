@@ -50,6 +50,7 @@ public final class MintEngine {
             done.done(line);
             tickRow(ctx, node, rows, i + 1, tip, true, done);
         };
+        if (watchStall(ctx, node, row, tip, next)) return;
         if ("CREATE".equals(phase)) phaseCreate(ctx, node, row, tip, next);
         else if ("MOVE".equals(phase)) phaseMove(ctx, node, row, tip, next);
         else if ("SPLIT".equals(phase)) phaseSplit(ctx, node, row, tip, next);
@@ -375,6 +376,57 @@ public final class MintEngine {
     /* STAMP processes EVERY ready blank per tick — engine.js behavior. The
      * old one-per-tick port made a 17-item mint take the best part of an
      * hour of screen-on time. */
+    /** Recovery for a stalled mint: forget every local lock/counter, drop the
+     *  coin cache, then re-derive the phase from what the chain actually
+     *  holds. Never posts a transaction — it only re-points the state machine
+     *  at reality. Driven by the Recover button AND the stall watchdog. */
+    public static void recover(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
+        String tid = row.optString("tokenid");
+        LocalStore.clearPending(ctx);
+        put(row, "splitretries", 0);
+        put(row, "splitunits", -1);
+        put(row, "stallticks", 0);
+        put(row, "error", "");
+        clearWalletCoinCache();
+        if (tid == null || tid.isEmpty()) {
+            put(row, "posted", 0);
+            setPhase(ctx, row, "CREATE", done);
+            return;
+        }
+        tokenCoins(node, tid, coins -> {
+            int stampedN = 0, blankN = 0, bigN = 0;
+            HashSet<String> used = new HashSet<>();
+            for (int i = 0; i < coins.length(); i++) {
+                JSONObject c = coins.optJSONObject(i);
+                if (c == null) continue;
+                String idx = StateNft.stamped(c);
+                if (idx != null) { used.add(idx); stampedN++; }
+                else if ("1".equals(c.optString("tokenamount"))) blankN++;
+                else if (parseInt(c.optString("tokenamount", "0")) > 1) bigN++;
+            }
+            mergeLocalStamps(row, used);
+            String phase;
+            if (used.size() >= row.optInt("size")) phase = "DONE";
+            else if (bigN > 0) phase = "SPLIT";
+            else if (blankN > 0) phase = "STAMP";
+            else if (coins.length() == 0) phase = "MOVE";
+            else phase = "STAMP";
+            LocalStore.logEvent(ctx, row.optString("name") + ": RECOVER — chain shows "
+                    + coins.length() + " coins (" + stampedN + " sealed, " + blankN
+                    + " blank, " + bigN + " unsplit) -> " + phase);
+            setPhase(ctx, row, phase, done);
+        }, e -> {
+            LocalStore.logEvent(ctx, row.optString("name") + ": RECOVER could not read coins: " + e);
+            LocalStore.upsert(ctx, row);
+            done.done("Recover: could not read the chain — " + e);
+        });
+    }
+
+    public static synchronized void clearWalletCoinCache() {
+        sWalletCoins = null;
+        sWalletCoinsAt = 0;
+    }
+
     private static void phaseStamp(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
         tokenCoins(node, row.optString("tokenid"), coins -> {
             HashSet<String> used = new HashSet<>();
@@ -414,7 +466,13 @@ public final class MintEngine {
             }
             if (ready.isEmpty()) {
                 LocalStore.upsert(ctx, row);
-                done.done(blanks.isEmpty() ? "Waiting for blank unit coins" : "Stamps confirming…");
+                // Say what the engine SEES — a bare "waiting" hid a coin-query
+                // blind spot for hours (2026-08-10)
+                done.done(blanks.isEmpty()
+                        ? "No blank units in view (coins " + coins.length()
+                          + ", sealed " + used.size() + "/" + row.optInt("size")
+                          + ", unsplit " + bigs.size() + ") — tap Recover mint"
+                        : "Stamps confirming…");
                 return;
             }
             List<String[]> plan = planAssignments(ready, used, row.optInt("size"));
@@ -716,6 +774,31 @@ public final class MintEngine {
         put(row, "error", "");
         LocalStore.upsert(ctx, row);
         done.done("Collection " + row.optString("name") + " -> " + phase);
+    }
+
+    /** Stall watchdog: a row whose sealed count has not moved for STALL_TICKS
+     *  consecutive engine ticks recovers itself (chain re-derive, no txn).
+     *  Progress resets the counter, so healthy slow mints never trip it. */
+    private static final int STALL_TICKS = 8;
+
+    private static boolean watchStall(Context ctx, NodeApi node, JSONObject row, int tip, Done done) {
+        int seen = row.optInt("minted", 0);
+        int last = row.optInt("stallseen", -1);
+        int ticks = row.optInt("stallticks", 0);
+        if (seen != last) {
+            put(row, "stallseen", seen);
+            put(row, "stallticks", 0);
+            LocalStore.upsert(ctx, row);
+            return false;
+        }
+        ticks++;
+        put(row, "stallticks", ticks);
+        LocalStore.upsert(ctx, row);
+        if (ticks < STALL_TICKS) return false;
+        LocalStore.logEvent(ctx, row.optString("name")
+                + ": no progress for " + ticks + " ticks — self-recovering");
+        recover(ctx, node, row, tip, done);
+        return true;
     }
 
     private static void setError(Context ctx, JSONObject row, String error, Done done) {
