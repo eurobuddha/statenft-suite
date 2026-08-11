@@ -4,14 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atelier</title>
-<link rel="stylesheet" href="styles.css?v=428">
-<script type="text/javascript" src="mds.js?v=428"></script>
-<script type="text/javascript" src="sanitize.js?v=428"></script>
-<script type="text/javascript" src="engine.js?v=428"></script>
-<script type="text/javascript" src="art.js?v=428"></script>
-<script type="text/javascript" src="ort.wasm.min.js?v=428"></script>
-<script type="text/javascript" src="photo.js?v=428"></script>
-<script type="text/javascript" src="sendall.js?v=428"></script>
+<link rel="stylesheet" href="styles.css?v=430">
+<script type="text/javascript" src="mds.js?v=430"></script>
+<script type="text/javascript" src="sanitize.js?v=430"></script>
+<script type="text/javascript" src="engine.js?v=430"></script>
+<script type="text/javascript" src="art.js?v=430"></script>
+<script type="text/javascript" src="ort.wasm.min.js?v=430"></script>
+<script type="text/javascript" src="photo.js?v=430"></script>
+<script type="text/javascript" src="sendall.js?v=430"></script>
+<script type="text/javascript" src="hosting.js?v=430"></script>
 </head>
 <body>
 <div class="beam"></div>
@@ -87,6 +88,13 @@
            AI-cartoonized on-device into flat vector art &mdash; design,
            preview and mint a sealed StateNFT collection from a seed.</p>
       </div>
+      <div class="studio-card" id="hub-hosting">
+        <p class="wizard-kick">&numero; 5 &middot; Hosting</p>
+        <h3>Your storage, your URLs</h3>
+        <p>Upload photos to your own WebDAV, IPFS or GitHub and auto-fill every
+           hosted URL &mdash; icons, links and whole url-mode collections.
+           No server? A free Pinata key pins to IPFS. (SFTP is in the app.)</p>
+      </div>
     </div>
 
     <!-- № 2 · single NFT wizard -->
@@ -114,6 +122,7 @@
         <label>External URL
           <input id="n-external" type="text" maxlength="512" placeholder="optional https://&hellip;" />
         </label>
+        <button class="btn btn-ghost host-up field-wide" data-lane="nftext" data-target="n-external">Upload full-res photo to hosting</button>
         <label class="field-wide">Web validation URL
           <input id="n-webvalidate" type="text" maxlength="512" placeholder="optional https://&hellip;/proof.txt" />
         </label>
@@ -165,6 +174,7 @@
         <span class="flabel">Wallet icon</span>
         <div class="icon-row">
           <input id="t-iconurl" type="text" placeholder="hosted image URL (https://...) — beats an upload" />
+          <button class="btn btn-ghost host-up" data-lane="tokicon" data-target="t-iconurl">Upload icon to hosting</button>
           <label class="icon-slot" id="t-icon-slot" title="or upload — embedded on-chain, always static">
             <span id="t-icon-glyph">+</span>
             <input type="file" accept="image/*" class="slot-input" id="t-icon-file"/>
@@ -215,6 +225,7 @@
           <input id="c-externalurl" type="text" maxlength="512"
                  placeholder="optional &mdash; https://yoursite.com/mycollection.html (collection homepage, stored in token metadata)" />
         </label>
+        <button class="btn btn-ghost host-up field-wide" data-lane="collext" data-target="c-externalurl">Upload full-res photo to hosting</button>
       </div>
 
       <div class="mode-row">
@@ -230,6 +241,7 @@
         </div>
         <span class="flabel" style="text-transform:none;letter-spacing:0.02em;margin-top:0.4rem">
           Animated GIF icons must be hosted URLs &mdash; uploads are embedded on-chain but always static.</span>
+        <button class="btn btn-ghost host-up" data-lane="collicon" data-target="c-iconurl">Upload an icon photo to hosting</button>
       </div>
 
       <div class="mode-row">
@@ -247,7 +259,9 @@
         <label>Extension
           <input id="c-ext" type="text" value=".png" />
         </label>
+        <button class="btn btn-ghost host-up field-wide" data-lane="collplates" data-target="c-base">Upload plates to hosting &rarr; auto-fill base URL</button>
       </div>
+      <input type="file" id="host-file" accept="image/*" multiple class="hidden" />
 
       <div id="embed-fields">
         <span class="flabel">Images &mdash; auto-compressed to stay transferable on-chain</span>
@@ -333,6 +347,7 @@
         </label>
         <label class="field-wide">External URL
           <input id="g-externalurl" type="text" maxlength="512" placeholder="optional https://&hellip;" />
+          <button class="btn btn-ghost host-up" data-lane="gext" data-target="g-externalurl">Upload full-res photo to hosting</button>
         </label>
         <label class="field-wide">Web validation URL
           <input id="g-webvalidate" type="text" maxlength="512" placeholder="optional https://&hellip;/proof.txt" />
@@ -351,6 +366,63 @@
       <p id="g-status" class="modal-status"></p>
     </div>
     </div><!-- /wiz-art -->
+
+    <!-- № 5 · hosting -->
+    <div id="wiz-hosting" class="wizard hidden">
+      <p class="wizard-kick">&numero; 5 &middot; Hosting</p>
+      <h2 class="wizard-title">Your storage, your URLs</h2>
+      <p class="cert-note">Add a destination, then use the &ldquo;Upload&rdquo;
+        buttons next to any URL field in the wizards. Uploads run in your
+        browser; credentials are stored on your node. WebDAV and a self-hosted
+        IPFS node need CORS enabled for this MiniDapp; Pinata and GitHub work
+        out of the box. SFTP is in the Android app.</p>
+      <div id="host-list"></div>
+      <div id="host-editor" class="hidden" style="margin-top:1rem">
+        <label>Name
+          <input id="host-name" type="text" maxlength="64" placeholder="my server" />
+        </label>
+        <label>Type
+          <select id="host-type" class="pv-n" style="width:100%">
+            <option value="webdav">WebDAV</option>
+            <option value="kubo">IPFS node (kubo)</option>
+            <option value="pinata">Pinata (no server)</option>
+            <option value="github">GitHub</option>
+          </select>
+        </label>
+        <div id="host-f-webdav" class="host-fields hidden">
+          <label>Write endpoint <input id="host-webdav-endpoint" type="text" placeholder="https://dav.example.com/files/" /></label>
+          <label>User <input id="host-webdav-user" type="text" /></label>
+          <label>Password <input id="host-webdav-password" type="password" /></label>
+          <label>Public URL prefix <input id="host-webdav-urlPrefix" type="text" placeholder="https://example.com/files/" /></label>
+        </div>
+        <div id="host-f-kubo" class="host-fields hidden">
+          <label>kubo API <input id="host-kubo-apiUrl" type="text" placeholder="http://127.0.0.1:5001" /></label>
+          <label>Public gateway <input id="host-kubo-gateway" type="text" placeholder="https://ipfs.eurobuddha.com" /></label>
+        </div>
+        <div id="host-f-pinata" class="host-fields hidden">
+          <label>Pinata JWT <input id="host-pinata-jwt" type="password" placeholder="eyJ… (free-tier key)" /></label>
+          <label>Gateway (optional) <input id="host-pinata-gateway" type="text" placeholder="https://gateway.pinata.cloud" /></label>
+        </div>
+        <div id="host-f-github" class="host-fields hidden">
+          <label>Owner <input id="host-github-owner" type="text" placeholder="eurobuddha" /></label>
+          <label>Repo <input id="host-github-repo" type="text" placeholder="nft-assets" /></label>
+          <label>Branch <input id="host-github-branch" type="text" placeholder="main" /></label>
+          <label>Token (PAT) <input id="host-github-token" type="password" placeholder="ghp_…" /></label>
+          <label>Serve via <input id="host-github-serve" type="text" placeholder="raw or pages" /></label>
+          <label>Pages prefix <input id="host-github-pagesPrefix" type="text" placeholder="https://you.github.io/nft-assets/" /></label>
+        </div>
+        <p id="host-status" class="modal-status"></p>
+        <div class="wizard-actions">
+          <button id="host-cancel" class="btn btn-ghost">Cancel</button>
+          <button id="host-test" class="btn">Save &amp; test</button>
+          <button id="host-save" class="btn btn-gold">Save</button>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <button id="host-hub-back" class="btn btn-ghost">&larr; Studio</button>
+        <button id="host-add" class="btn btn-gold">Add destination</button>
+      </div>
+    </div><!-- /wiz-hosting -->
   </section>
 
   <!-- ============ FILTR : image editor ============ -->
@@ -567,7 +639,7 @@
 
 <footer class="colophon">
   <span>identities enforced by KISS&nbsp;VM token script</span>
-  <span id="app-version" class="mono">Atelier v4.2.8</span>
+  <span id="app-version" class="mono">Atelier v4.3.0</span>
 </footer>
 
 <!-- burial modal -->
@@ -716,10 +788,10 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="text/javascript" src="app.js?v=428"></script>
-<script type="text/javascript" src="art-studio.js?v=428"></script>
-<script type="text/javascript" src="filtr-engine.js?v=428"></script>
-<script type="text/javascript" src="filtr.js?v=428"></script>
-<script type="text/javascript" src="filtr-tabs.js?v=428"></script>
+<script type="text/javascript" src="app.js?v=430"></script>
+<script type="text/javascript" src="art-studio.js?v=430"></script>
+<script type="text/javascript" src="filtr-engine.js?v=430"></script>
+<script type="text/javascript" src="filtr.js?v=430"></script>
+<script type="text/javascript" src="filtr-tabs.js?v=430"></script>
 </body>
 </html>

@@ -41,6 +41,9 @@ echo
 
 echo "== filtr (engine surface + tab bindings + schema/id drift)"
 node test/filtr.test.js || fail=1
+
+echo "== hosting (pure-fn parity vs Android + tab id drift)"
+node test/hosting.test.js || fail=1
 echo
 
 echo "== cli (bury / transfer / mint parity)"

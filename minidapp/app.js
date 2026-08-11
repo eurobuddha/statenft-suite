@@ -1333,6 +1333,23 @@ function mintCollection() {
     }
   }
 
+  // verify-before-mint: hosted URLs the mint will seal must serve first
+  var hostUrls = [];
+  if (mode === "url") { hostUrls.push(base + "1" + ext); hostUrls.push(base + size + ext); }
+  if (iconurl && iconurl.indexOf("http") === 0) hostUrls.push(iconurl);
+  if (externalurl) hostUrls.push(externalurl);
+  if (webvalidate) hostUrls.push(webvalidate);
+  if (hostUrls.length && !mintCollection._hostVerified) {
+    status.innerText = "verifying hosted URLs…";
+    HOSTING.verify(hostUrls, function (err) {
+      if (err) { status.innerText = err; return; }
+      mintCollection._hostVerified = true;
+      mintCollection();
+    });
+    return;
+  }
+  mintCollection._hostVerified = false;
+
   status.innerText = "preparing...";
   function withIcon(next) {
     if (icon || mode !== "embed" || !WIZ_IMAGES[0]) { next(); return; }
@@ -1805,16 +1822,249 @@ function studioShow(panel) {
   $("wiz-nft").classList.toggle("hidden", panel !== "nft");
   $("wiz-token").classList.toggle("hidden", panel !== "token");
   $("wiz-art").classList.toggle("hidden", panel !== "art");
+  $("wiz-hosting").classList.toggle("hidden", panel !== "hosting");
 }
 
 $("hub-collection").onclick = function () { studioShow("collection"); };
 $("hub-nft").onclick = function () { studioShow("nft"); updateNftPreview(); };
 $("hub-token").onclick = function () { studioShow("token"); updateTokenPreview(); };
 $("hub-art").onclick = function () { studioShow("art"); artStudioEnter(); };
+$("hub-hosting").onclick = function () { studioShow("hosting"); hostingRender(); };
 $("coll-hub-back").onclick = function () { studioShow("hub"); };
 $("nft-hub-back").onclick = function () { studioShow("hub"); };
 $("token-hub-back").onclick = function () { studioShow("hub"); };
 $("art-hub-back").onclick = function () { studioShow("hub"); };
+$("host-hub-back").onclick = function () { studioShow("hub"); };
+
+/* ============ HOSTING (No 5) ============ */
+
+var HOST_EDIT = null;   // profile object being edited (null = list view)
+
+function hostingRender() {
+  $("host-editor").classList.add("hidden");
+  HOSTING.load(function (profiles) {
+    var list = $("host-list");
+    list.innerHTML = "";
+    if (!profiles.length) {
+      list.innerHTML = "<p class='cert-note'>No destinations yet. Add one, then use the "
+        + "Upload buttons in the wizards. No server? A free Pinata key pins to IPFS.</p>";
+    }
+    profiles.forEach(function (p, i) {
+      var row = document.createElement("div");
+      row.className = "collection-card";
+      row.style.padding = "0.7rem 0.9rem";
+      row.innerHTML = "<b>" + esc(p.name || "(unnamed)") + "</b> <span class='mono'>"
+        + esc(p.type) + (p.def ? " · default" : "") + "</span>";
+      var btns = document.createElement("div");
+      btns.style.marginTop = "0.4rem";
+      btns.appendChild(hbtn("Test", function () { hostingTest(p); }));
+      btns.appendChild(hbtn("Edit", function () { hostingEdit(p); }));
+      if (!p.def) btns.appendChild(hbtn("Make default", function () {
+        profiles.forEach(function (q) { q.def = (q === p); });
+        HOSTING.save(profiles, function () { hostingRender(); });
+      }));
+      btns.appendChild(hbtn("Delete", function () {
+        profiles.splice(i, 1);
+        HOSTING.save(profiles, function () { hostingRender(); });
+      }));
+      row.appendChild(btns);
+      list.appendChild(row);
+    });
+  });
+}
+
+function hbtn(label, fn) {
+  var b = document.createElement("button");
+  b.className = "btn btn-ghost";
+  b.style.marginRight = "0.3rem";
+  b.textContent = label;
+  b.onclick = fn;
+  return b;
+}
+
+function esc(s) { return ("" + s).replace(/[<>&]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]; }); }
+
+function hostingEdit(p) {
+  HOST_EDIT = p || { v: 1, id: "hp_" + Date.now(), name: "", type: "webdav", def: false,
+    pathTemplate: "atelier/{collection}/{name}-{ts}{ext}", dirTemplate: "atelier/{collection}-{ts}", webdav: {} };
+  if (!HOST_EDIT[HOST_EDIT.type]) HOST_EDIT[HOST_EDIT.type] = {};
+  $("host-editor").classList.remove("hidden");
+  $("host-name").value = HOST_EDIT.name || "";
+  $("host-type").value = HOST_EDIT.type;
+  hostingShowFields();
+  $("host-status").innerText = "";
+}
+
+function hostingShowFields() {
+  var t = $("host-type").value;
+  ["webdav", "kubo", "pinata", "github"].forEach(function (k) {
+    $("host-f-" + k).classList.toggle("hidden", k !== t);
+  });
+  if (HOST_EDIT) {
+    var c = HOST_EDIT[t] || {};
+    var keys = { webdav: ["endpoint", "user", "password", "urlPrefix"],
+                 kubo: ["apiUrl", "gateway"], pinata: ["jwt", "gateway"],
+                 github: ["owner", "repo", "branch", "token", "serve", "pagesPrefix"] };
+    (keys[t] || []).forEach(function (k) {
+      var el = $("host-" + t + "-" + k);
+      if (el) el.value = c[k] || "";
+    });
+  }
+}
+
+$("host-type").onchange = function () {
+  if (HOST_EDIT) { HOST_EDIT.type = $("host-type").value; if (!HOST_EDIT[HOST_EDIT.type]) HOST_EDIT[HOST_EDIT.type] = {}; }
+  hostingShowFields();
+};
+$("host-add").onclick = function () { hostingEdit(null); };
+$("host-cancel").onclick = function () { HOST_EDIT = null; $("host-editor").classList.add("hidden"); };
+
+function hostingCollect() {
+  var t = $("host-type").value;
+  HOST_EDIT.type = t;
+  HOST_EDIT.name = $("host-name").value.trim();
+  var keys = { webdav: ["endpoint", "user", "password", "urlPrefix"],
+               kubo: ["apiUrl", "gateway"], pinata: ["jwt", "gateway"],
+               github: ["owner", "repo", "branch", "token", "serve", "pagesPrefix"] };
+  var c = HOST_EDIT[t] || {};
+  (keys[t] || []).forEach(function (k) {
+    var el = $("host-" + t + "-" + k);
+    if (el) c[k] = el.value.trim();
+  });
+  HOST_EDIT[t] = c;
+  return HOST_EDIT.name !== "";
+}
+
+$("host-save").onclick = function () {
+  if (!hostingCollect()) { $("host-status").innerText = "Give the destination a name"; return; }
+  HOSTING.load(function (profiles) {
+    var found = false;
+    for (var i = 0; i < profiles.length; i++) if (profiles[i].id === HOST_EDIT.id) { profiles[i] = HOST_EDIT; found = true; }
+    if (!found) profiles.push(HOST_EDIT);
+    if (profiles.length === 1) profiles[0].def = true;
+    HOSTING.save(profiles, function () { HOST_EDIT = null; hostingRender(); });
+  });
+};
+
+$("host-test").onclick = function () {
+  if (!hostingCollect()) { $("host-status").innerText = "Give the destination a name"; return; }
+  var p = HOST_EDIT;
+  HOSTING.load(function (profiles) {
+    var found = false;
+    for (var i = 0; i < profiles.length; i++) if (profiles[i].id === p.id) { profiles[i] = p; found = true; }
+    if (!found) profiles.push(p);
+    if (profiles.length === 1) profiles[0].def = true;
+    HOSTING.save(profiles, function () { hostingTest(p); });
+  });
+};
+
+function hostingTest(p) {
+  $("host-status").innerText = "Testing " + (p.name || "") + "…";
+  HOSTING.testProfile(p, function (msg) { $("host-status").innerText = msg; });
+}
+
+/* ---- upload buttons in the wizards ---- */
+
+var HOST_UP_LANE = "", HOST_UP_TARGET = "";
+
+document.addEventListener("click", function (ev) {
+  var b = ev.target;
+  if (!b || !b.classList || !b.classList.contains("host-up")) return;
+  ev.preventDefault();
+  HOSTING.load(function (profiles) {
+    var def = HOSTING.getDefault(profiles);
+    if (!def) { toast("Set up a destination in Studio → Hosting"); studioShow("hosting"); hostingRender(); return; }
+    HOST_UP_LANE = b.getAttribute("data-lane");
+    HOST_UP_TARGET = b.getAttribute("data-target");
+    var f = $("host-file");
+    f.multiple = (HOST_UP_LANE === "collplates");
+    f.value = "";
+    f.click();
+  });
+});
+
+$("host-file").onchange = function () {
+  var files = Array.prototype.slice.call(this.files || []);
+  if (!files.length) return;
+  HOSTING.load(function (profiles) {
+    var p = HOSTING.getDefault(profiles);
+    if (!p) { toast("No hosting destination"); return; }
+    var collSlug = HOSTING.slug($("c-name") ? $("c-name").value || "atelier" : "atelier");
+    if (HOST_UP_LANE === "collplates") {
+      hostUploadPlates(p, files, collSlug);
+    } else {
+      hostUploadSingle(p, files[0], collSlug);
+    }
+  });
+};
+
+function extFromType(mime) {
+  return ({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+            "image/gif": ".gif", "image/svg+xml": ".svg" })[mime] || ".png";
+}
+
+function hostUploadSingle(p, file, collSlug) {
+  toast("Uploading to " + p.name + "…");
+  var lane = HOST_UP_LANE, target = HOST_UP_TARGET;
+  var mime = file.type || "image/png";
+  // icon lanes get squared/compressed; external/full-res pass through
+  if (lane === "collicon" || lane === "tokicon") {
+    squareWebp(file, 512, function (blob) {
+      HOSTING.uploadSingle(p, blob, "image/webp", ".webp", collSlug, lane, function (err, url) {
+        hostDone(err, url, target);
+      });
+    });
+  } else {
+    HOSTING.uploadSingle(p, file, mime, extFromType(mime), collSlug, lane, function (err, url) {
+      hostDone(err, url, target);
+    });
+  }
+}
+
+function hostUploadPlates(p, files, collSlug) {
+  toast("Uploading " + files.length + " plates to " + p.name + "…");
+  var ext0 = null, plates = [];
+  for (var i = 0; i < files.length; i++) {
+    var e = extFromType(files[i].type || "image/png");
+    if (ext0 === null) ext0 = e;
+    else if (ext0 !== e) { toast("All plates must share one file type"); return; }
+    plates.push({ blob: files[i], mime: files[i].type || "image/png", ext: e });
+  }
+  HOSTING.uploadPlates(p, plates, collSlug, function (err, base) {
+    if (err) { toast(err); return; }
+    HOSTING.verify([base + "1" + ext0, base + files.length + ext0], function (verr) {
+      if (verr) { toast(verr); return; }
+      if ($("c-base")) $("c-base").value = base;
+      if ($("c-ext")) $("c-ext").value = ext0;
+      // switch to hosted mode
+      var urlRadio = document.querySelector("input[name='c-mode'][value='url']");
+      if (urlRadio) { urlRadio.checked = true; urlRadio.dispatchEvent(new Event("change")); }
+      toast("Uploaded ✓ — base URL filled");
+    });
+  });
+}
+
+function hostDone(err, url, target) {
+  if (err) { toast(err); return; }
+  HOSTING.verify([url], function (verr) {
+    if (verr) { toast(verr); return; }
+    if ($(target)) $(target).value = url;
+    toast("Uploaded ✓ — URL filled");
+  });
+}
+
+function squareWebp(file, side, cb) {
+  var img = new Image();
+  img.onload = function () {
+    var s = Math.min(img.width, img.height);
+    var cv = document.createElement("canvas");
+    cv.width = side; cv.height = side;
+    cv.getContext("2d").drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, side, side);
+    cv.toBlob(function (b) { cb(b); }, "image/webp", 0.85);
+  };
+  img.onerror = function () { cb(file); };
+  img.src = URL.createObjectURL(file);
+}
 /* entering the Studio tab always lands on the hub */
 $("tab-create").addEventListener("click", function () { studioShow("hub"); });
 $("tab-collections").addEventListener("click", function () { loadSingles(); });
