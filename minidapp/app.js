@@ -634,7 +634,14 @@ function maybeSelfHeal(distinct, size) {
   toast("Chain shows " + distinct + " / " + size + " sealed — resuming this mint");
   MDS.cmd("block", function (bres) {
     var tip = bres.status ? parseInt(bres.response.block, 10) : 0;
-    engineRecover(OPEN_ROW, tip, function () { refreshDetail(); });
+    engineRecover(OPEN_ROW, tip, function () {
+      /* a failed recover (chain unreadable) leaves the row on DONE —
+       * unlatch so the next refresh retries instead of going silent */
+      MDS.sql("SELECT phase FROM collections WHERE id=" + OPEN_ROW.ID, function (r) {
+        if (r.rows && r.rows.length && r.rows[0].PHASE === "DONE") { SELF_HEALED = false; }
+        refreshDetail();
+      });
+    });
   });
 }
 
@@ -1277,7 +1284,7 @@ function reshrinkB64(b64, budget, cb) {
     }
     /* last resort: halve dimensions at floor quality until it fits —
      * "raster always fits" is a law; every slim target relies on it */
-    for (var dd = 100; dd >= 16; dd = Math.floor(dd / 2)) {
+    for (var dd = 128; dd >= 16; dd = Math.floor(dd / 2)) {
       var s2 = Math.min(1, dd / Math.max(img.width, img.height));
       var cv2 = document.createElement("canvas");
       cv2.width = Math.max(1, Math.round(img.width * s2));
@@ -1371,7 +1378,10 @@ function mintCollection() {
      * showed plate 1 instead (2026-08-11). */
     var envNoIcon = engineEnvelope(JSON.stringify(
       artExactMeta(name, desc, size, "", externalurl, null)).length);
-    var iconAllow = envNoIcon.ok ? envNoIcon.imageBudget - need : 0;
+    /* −64: embedding the icon adds its own metadata overhead (JSON field +
+     * the artimage wrapper); a slim landing flush on the cap failed the
+     * happy() recheck and dropped the icon anyway */
+    var iconAllow = envNoIcon.ok ? envNoIcon.imageBudget - need - 64 : 0;
     function dropIcon() {
       icon = "";
       if (envNoIcon.ok) {
@@ -1381,7 +1391,9 @@ function mintCollection() {
       status.innerText = envNoIcon.error + " — even without an icon; shorten the description";
       cb(null);
     }
-    if (iconAllow < 800) { dropIcon(); return; }
+    /* 1200 = the ladder's tested floor (pure noise fits it); below that an
+     * icon would be mush — drop it instead */
+    if (iconAllow < 1200) { dropIcon(); return; }
     reshrinkB64(raw, Math.min(iconAllow, 6000), function (slim) {
       if (slim) {
         var icon2 = slim + "</artimage>";

@@ -725,6 +725,8 @@ function engineWatchStall(row, tip, done) {
  * ~one seal per window. Batch-capped: a burst of competing TxPoWs starves
  * itself down to about one confirmation per round (Maths, 2026-08-10). */
 var ENGINE_REPLAN_BATCH = 2;
+/* All stamp posts per tick — replans + fresh combined. */
+var ENGINE_STAMP_BATCH = 4;
 /* A reservation whose coin vanished entirely with its index unconfirmed can
  * only be freed after a far deeper wait — the txn that consumed the coin may
  * still surface its stamp. */
@@ -836,6 +838,9 @@ function enginePhaseStampCoins(row, tip, resList, done) {
         for (var p = 0; p < replans.length; p++) { replanned[replans[p].coinid] = true; }
         var jobs = replans.slice();
         for (var b2 = 0; b2 < blanks.length; b2++) {
+          // one cap for ALL stamps per tick (re-posts prioritized): the
+          // burst-starves-itself observation applies to fresh posts too
+          if (jobs.length >= ENGINE_STAMP_BATCH) { break; }
           var c2 = blanks[b2];
           if (replanned[c2.coinid]) { continue; }
           if (!enginePendingOk(c2.coinid, tip)) { continue; }

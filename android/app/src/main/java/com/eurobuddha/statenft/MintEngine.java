@@ -501,6 +501,9 @@ public final class MintEngine {
             }
             List<String[]> plan = new ArrayList<>(replans);
             plan.addAll(planAssignments(ready, used, row.optInt("size")));
+            // one cap for ALL stamps per tick (re-posts prioritized): the
+            // burst-starves-itself observation applies to fresh posts too
+            if (plan.size() > STAMP_BATCH) plan = new ArrayList<>(plan.subList(0, STAMP_BATCH));
             if (plan.isEmpty()) {
                 LocalStore.upsert(ctx, row);
                 // Say what the engine SEES — a bare "waiting" hid a coin-query
@@ -974,6 +977,8 @@ public final class MintEngine {
      *  REPLAN_BATCH per tick: a burst of competing TxPoWs starves itself
      *  down to about one confirmation per round. */
     private static final int REPLAN_BATCH = 2;
+    /** All stamp posts per tick — replans + fresh combined. */
+    private static final int STAMP_BATCH = 4;
     /** A reservation whose coin has vanished from the coin set entirely with
      *  its index still unconfirmed can only be freed after a much deeper wait
      *  — the txn that consumed the coin may still surface its stamp. */
@@ -1006,6 +1011,8 @@ public final class MintEngine {
                         + it.optInt("idx") + " onto its reserved coin — still blank");
                 replans.add(new String[]{ cid, String.valueOf(it.optInt("idx")) });
             } else if (!allIds.contains(cid)) {
+                // deliberately the PRE-stamp local `at`: a reservation whose
+                // clock started this tick must wait a full TTL from now
                 if (at < 0) continue;
                 if (tip - at < VANISHED_TTL) continue;
                 LocalStore.logEvent(ctx, row.optString("name") + ": released idx "

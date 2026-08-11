@@ -903,6 +903,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 + "/" + m.size + " sealed — self-recovering");
         toast("Chain shows " + m.minted + "/" + m.size + " — resuming this mint");
         MintEngine.recover(this, node, row, lastTip, msg -> runOnUiThread(() -> {
+            // a failed recover (chain unreadable) leaves the row on DONE —
+            // unlatch so the next refresh retries instead of going silent
+            JSONObject after = LocalStore.findById(this, m.localId);
+            if (after != null && "DONE".equals(after.optString("phase"))) selfHealed = false;
             engageEngine();
             loadLocalCollections();
             openMeta = findCollectionByLocalId(m.localId, m);
@@ -1626,9 +1630,15 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         JSONObject metaNoIcon = StateNft.tokenMetadata(m);
                         if (collectionItemTraits != null && collectionItemTraits.length() > 0)
                             put(metaNoIcon, "traits", collectionItemTraits);
-                        int iconAllow = MintEngine.imageBudget(metaNoIcon.toString().length()) - need;
+                        // −64: embedding the icon adds its own metadata overhead
+                        // ("url":"<artimage>…"); a slim landing flush on the cap
+                        // failed the recheck and dropped the icon anyway
+                        int iconAllow = MintEngine.imageBudget(metaNoIcon.toString().length()) - need - 64;
                         m.icon = iconSave;
-                        String slim = iconAllow >= 800
+                        // 1200 = the ShrinkLadderTest-guaranteed floor (pure
+                        // noise fits it); below that an icon would be mush —
+                        // drop it instead
+                        String slim = iconAllow >= 1200
                                 ? ImageTools.iconFromBase64(m.icon, Math.min(iconAllow, ImageTools.ICON_BUDGET))
                                 : "";
                         if (!slim.isEmpty()) {
