@@ -70,8 +70,21 @@ final class SftpUploader implements Hosting.Uploader, AutoCloseable {
                         + " — possible MITM. Server now presents " + seenFp
                         + ". Re-verify your server before re-pinning.");
             }
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            // "Auth cancel/fail" = the server refused the credential we sent.
+            // For password auth that usually means the server only accepts a
+            // key (common for root) — point the user at the key option.
+            if (msg.toLowerCase().contains("auth")) {
+                boolean keyMode = "key".equals(profile.cfgStr("auth"));
+                throw new Hosting.HostingException(keyMode
+                        ? "Server rejected the private key for " + user + "@" + host
+                          + ". Check the key is correct, unencrypted, and authorised for this user."
+                        : "Server rejected the password for " + user + "@" + host
+                          + ". Many servers accept ONLY key auth (especially for root) — "
+                          + "switch Authentication to Private key and paste your key.");
+            }
             throw new Hosting.HostingException("SFTP connect failed: "
-                    + host + ":" + port + " — " + e.getMessage());
+                    + host + ":" + port + " — " + msg);
         }
     }
 

@@ -143,6 +143,26 @@ public final class ImageTools {
         return Bitmap.createBitmap(src, x, y, side, side);
     }
 
+    /** EXIF-correct bitmap bounded so its LONG edge ≤ maxEdge, aspect ratio
+     *  kept (no crop). For hosting-grade plates. Null on failure. */
+    public static Bitmap boundedBitmap(Context c, Uri uri, int maxEdge) {
+        try {
+            ImageDecoder.Source src = ImageDecoder.createSource(c.getContentResolver(), uri);
+            return ImageDecoder.decodeBitmap(src, (d, info, s) -> {
+                d.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                d.setMutableRequired(false);
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight();
+                int max = Math.max(w, h);
+                if (max > maxEdge) {
+                    float f = maxEdge / (float) max;
+                    d.setTargetSize(Math.max(1, Math.round(w * f)), Math.max(1, Math.round(h * f)));
+                }
+            });
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** EXIF-correct center-cropped square bitmap at px×px via ImageDecoder
      *  (orientation applied once). Null on any failure. */
     public static Bitmap squareBitmap(Context c, Uri uri, int px) {

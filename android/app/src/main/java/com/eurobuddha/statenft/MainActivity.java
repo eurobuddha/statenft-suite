@@ -95,6 +95,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     /* collection create draft */
     private String createMode = "url";
     private String createName = "", createDesc = "", createSize = "12";
+    private boolean createWvAuto = false;   // auto-create web-validation doc post-mint
     private String createBase = "", createExt = ".png", createIcon = "", createExternal = "", createWeb = "";
     private String[] createImages = new String[0];
     private int pendingImageIndex = -1;
@@ -1540,6 +1541,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         pickHostSingle(PICK_HOST_EXTERNAL, "collext"); }), lpm(0, 4, 0, 0));
         webF[0] = fieldInto(body, "Web validate URL (optional)", "https://…/validate", createWeb);
         webF[0].addTextChangedListener(watch(sv -> createWeb = sv));
+        body.addView(Design.note(this, "The validation doc must contain the tokenid, which only exists after minting — so a missing doc never blocks the mint; it just isn't validated until the doc is live."), lpm(0, 4, 0, 0));
+        if (HostingStore.getDefault(this) != null) {
+            LinearLayout wvRow = horizontal(Gravity.CENTER_VERTICAL);
+            android.widget.CheckBox wvChk = new android.widget.CheckBox(this);
+            wvChk.setChecked(createWvAuto);
+            wvChk.setOnCheckedChangeListener((b, on) -> { createWvAuto = on; if (on) createWeb = ""; renderCreateCollection(); });
+            wvRow.addView(wvChk, new LinearLayout.LayoutParams(-2, -2));
+            wvRow.addView(Design.note(this, "Auto-create the validation doc on my hosting after mint (writes the tokenid for you — overrides the URL above)"),
+                    new LinearLayout.LayoutParams(0, -2, 1){{ leftMargin = dp(6); }});
+            body.addView(wvRow, lpm(0, 6, 0, 0));
+        }
 
         TextView go = Design.button(this, "Mint collection", true);
         go.setOnClickListener(v -> createCollection(name, desc, size, baseF[0], extF[0], iconF[0], extUrlF[0], webF[0]));
@@ -1586,7 +1598,9 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             if ("url".equals(createMode)) { urls.add(bs + "1" + x); urls.add(bs + count + x); }
             if (!ic.isEmpty() && ic.startsWith("http")) urls.add(ic);
             if (!ex.isEmpty()) urls.add(ex);
-            if (!w.isEmpty()) urls.add(w);
+            // web-validation URL is NOT gated: the proof doc is usually written
+            // AFTER mint (it must contain the tokenid, which only exists then).
+            // An absent doc just means "not yet validated", never a failed mint.
             if (!urls.isEmpty()) {
                 verifyHostedThen(urls, () -> { hostGatePassed = true;
                         createCollection(name, desc, size, base, ext, icon, external, web); });
@@ -1594,7 +1608,18 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             }
         }
         hostGatePassed = false;
-        final String bsF = bs, icF = ic, exF = ex, wF = w, nF = n, dF = d;
+        // auto web-validation: derive a path on the default hosting profile and
+        // bake its URL into the token now; the engine writes the tokenid there
+        // once minting reveals it
+        String wvRel = "", effWeb = w;
+        Hosting.Profile hp = HostingStore.getDefault(this);
+        boolean wvAuto = createWvAuto && hp != null;
+        if (wvAuto) {
+            wvRel = "atelier/" + Hosting.slug(n) + "-validate-" + Hosting.ts36() + ".txt";
+            effWeb = Hosting.publicUrl(hp, wvRel, false);
+        }
+        final String bsF = bs, icF = ic, exF = ex, wF = effWeb, nF = n, dF = d;
+        final String wvRelF = wvRel; final boolean wvAutoF = wvAuto;
         final int countF = count;
         node.cmd("getaddress", new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
@@ -1718,6 +1743,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     }
                 }
                 JSONObject row = MintEngine.rowFromMeta(m, items);
+                if (wvAutoF) { put(row, "wvauto", 1); put(row, "wvrel", wvRelF); put(row, "wvdone", 0); }
                 if (collectionItemTraits != null && collectionItemTraits.length() > 0
                         && "embed".equals(createMode)) {
                     put(row, "itemtraits", collectionItemTraits);
@@ -1903,7 +1929,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             java.util.List<String> urls = new java.util.ArrayList<>();
             if (!nftEmbed && nftUrl.trim().startsWith("http")) urls.add(nftUrl.trim());
             if (!nftExternal.trim().isEmpty()) urls.add(nftExternal.trim());
-            if (!nftWeb.trim().isEmpty()) urls.add(nftWeb.trim());
+            // nftWeb (validation doc) is NOT gated — written post-mint with the tokenid
             if (!urls.isEmpty()) { verifyHostedThen(urls, () -> { hostGatePassed = true; mintNft(go); }); return; }
         }
         hostGatePassed = false;
@@ -3080,10 +3106,30 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 hostField(cfg, "host", "Host", "eurobuddha.com", false);
                 hostField(cfg, "port", "Port", "22", false);
                 hostField(cfg, "user", "User", "root", false);
-                hostField(cfg, "password", "Password", "••••••", true);
-                hostField(cfg, "remoteRoot", "Remote folder", "/var/www/html/", false);
+                final org.json.JSONObject sftpCfg = cfg;
+                boolean keyAuth = "key".equals(cfg.optString("auth", "password"));
+                body.addView(Design.kicker(this, "Authentication"), lpm(0, 10, 0, 5));
+                LinearLayout authRow = horizontal(Gravity.CENTER_VERTICAL);
+                TextView pwChip = Design.chip(this, "Password", !keyAuth);
+                TextView keyChip = Design.chip(this, "Private key", keyAuth);
+                pwChip.setPadding(dp(12), dp(6), dp(12), dp(6));
+                keyChip.setPadding(dp(12), dp(6), dp(12), dp(6));
+                pwChip.setOnClickListener(v -> { Hosting.put(sftpCfg, "auth", "password"); renderHostingEdit(hostEditProfile); });
+                keyChip.setOnClickListener(v -> { Hosting.put(sftpCfg, "auth", "key"); renderHostingEdit(hostEditProfile); });
+                LinearLayout.LayoutParams achlp = new LinearLayout.LayoutParams(-2, -2); achlp.rightMargin = dp(8);
+                authRow.addView(pwChip, achlp);
+                authRow.addView(keyChip, new LinearLayout.LayoutParams(-2, -2));
+                body.addView(authRow, lpm(0, 0, 0, 4));
+                if (keyAuth) {
+                    hostFieldMulti(cfg, "privateKey", "Private key (paste PEM — begins -----BEGIN … PRIVATE KEY-----)");
+                    body.addView(Design.note(this, "Paste an OpenSSH/PEM private key (e.g. the contents of ~/.ssh/your_key). Passphrase-protected keys aren't supported yet — use an unencrypted key. This is how your shell already logs in."), lpm(0, 6, 0, 0));
+                } else {
+                    hostField(cfg, "password", "Password", "••••••", true);
+                    body.addView(Design.note(this, "Tap 👁 to reveal the password and check the on-screen keyboard didn't change it (a single wrong character reads to the server as a failed login)."), lpm(0, 6, 0, 0));
+                }
+                hostField(cfg, "remoteRoot", "Remote folder (web ROOT)", "/var/www/html/", false);
                 hostField(cfg, "urlPrefix", "Public URL prefix", "https://eurobuddha.com/", false);
-                body.addView(Design.note(this, "Password auth shown. Paste a private key into Password? Not yet — v1 is password. First connect asks you to confirm the server's fingerprint."), lpm(0, 8, 0, 0));
+                body.addView(Design.note(this, "Remote folder and URL prefix must point at the SAME place — the web root. Don't add a subfolder: Atelier creates its own atelier/… path under both. e.g. /var/www/html/ ↔ https://eurobuddha.com/ . First connect asks you to confirm the server's fingerprint."), lpm(0, 8, 0, 0));
                 break;
             case Hosting.TYPE_WEBDAV:
                 hostField(cfg, "endpoint", "WebDAV write endpoint", "https://dav.example.com/files/", false);
@@ -3136,18 +3182,68 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     /** A hosting-config field; SECRET fields are wrapped via Crypt on change
      *  and shown as a password input. */
     private void hostField(org.json.JSONObject cfg, String key, String label, String hint, boolean secret) {
-        boolean isSecret = secret;
+        final boolean isSecret = secret;
         String cur = cfg.optString(key, "");
-        String shown = isSecret ? "" : cur;   // never re-display a stored secret
-        EditText e = fieldInto(body, label, isSecret && !cur.isEmpty() ? "•••••• (stored — type to replace)" : hint, shown);
-        if (isSecret) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        e.addTextChangedListener(watch(sv -> {
-            if (isSecret) {
-                if (!sv.isEmpty()) Hosting.put(cfg, key, Crypt.encrypt(sv));
-            } else {
-                Hosting.put(cfg, key, sv);
-            }
-        }));
+        if (!isSecret) {
+            EditText e = fieldInto(body, label, hint, cur);
+            e.addTextChangedListener(watch(sv -> Hosting.put(cfg, key, sv)));
+            return;
+        }
+        // secret: kicker + [ input | eye ] row, so the value can be revealed
+        // to confirm the keyboard didn't mangle it (a wrong char reads to the
+        // server as "Failed password")
+        body.addView(Design.kicker(this, label), lpm(0, 8, 0, 5));
+        LinearLayout row = horizontal(Gravity.CENTER_VERTICAL);
+        final EditText e = input(!cur.isEmpty() ? "•••••• (stored — type to replace)" : hint);
+        // NO_SUGGESTIONS + password variation: stop autocaps/predictive text
+        final int MASKED = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        final int SHOWN = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        e.setInputType(MASKED);
+        e.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        e.addTextChangedListener(watch(sv -> { if (!sv.isEmpty()) Hosting.put(cfg, key, Crypt.encrypt(sv)); }));
+        row.addView(e, new LinearLayout.LayoutParams(0, dp(48), 1));
+        final TextView eye = Design.text(this, "👁", 18, Design.INK(), Design.sans());
+        eye.setGravity(Gravity.CENTER);
+        eye.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
+        eye.setClickable(true);
+        final boolean[] visible = { false };
+        eye.setOnClickListener(v -> {
+            visible[0] = !visible[0];
+            int cursor = e.getSelectionEnd();
+            e.setInputType(visible[0] ? SHOWN : MASKED);
+            e.setTypeface(Design.sans());   // setInputType resets the typeface
+            if (cursor >= 0 && cursor <= e.length()) e.setSelection(cursor);
+            eye.setAlpha(visible[0] ? 1f : 0.5f);
+        });
+        eye.setAlpha(0.5f);
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        elp.leftMargin = dp(6);
+        row.addView(eye, elp);
+        body.addView(row, lpm(0, 0, 0, 4));
+    }
+
+    /** Multiline secret field (SFTP private key). Stored encrypted; the box
+     *  stays blank when a key is already stored (type to replace). */
+    private void hostFieldMulti(org.json.JSONObject cfg, String key, String label) {
+        String cur = cfg.optString(key, "");
+        body.addView(Design.kicker(this, label), lpm(0, 8, 0, 5));
+        EditText e = new EditText(this);
+        e.setHint(cur.isEmpty() ? "-----BEGIN OPENSSH PRIVATE KEY-----\n…" : "•••••• (stored — paste to replace)");
+        e.setTextColor(Design.INK());
+        e.setHintTextColor(Design.DIM());
+        e.setTextSize(11f);
+        e.setTypeface(Design.mono());
+        e.setSingleLine(false);
+        e.setMinLines(4);
+        e.setGravity(Gravity.TOP | Gravity.START);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        e.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
+        e.addTextChangedListener(watch(sv -> { if (!sv.trim().isEmpty()) Hosting.put(cfg, key, Crypt.encrypt(sv.trim())); }));
+        body.addView(e, lpm(0, 0, 0, 4));
     }
 
     private void testProfile(Hosting.Profile p) {
@@ -3433,7 +3529,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     }
 
     private void resetCollectionDraft() {
-        createName = ""; createDesc = ""; createSize = "12";
+        createName = ""; createDesc = ""; createSize = "12"; createWvAuto = false;
         createBase = ""; createExt = ".png"; createIcon = ""; createExternal = ""; createWeb = "";
         createImages = new String[0];
         createIconB64 = "";
@@ -3803,13 +3899,20 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             } catch (Hosting.HostingException e) {
                 result = e.getMessage();
             } catch (Throwable t) {
-                result = "upload failed: " + t.getClass().getSimpleName();
+                result = "upload failed: " + t.getClass().getSimpleName()
+                        + (t.getMessage() == null ? "" : " — " + t.getMessage());
             } finally {
                 if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
             }
             final String err = result, okUrl = url;
             main.post(() -> {
-                if (err != null) { toast(err); return; }
+                if (err != null) {
+                    LocalStore.logEvent(this, "HOSTING " + lane + " FAILED: " + err);
+                    android.util.Log.e("AtelierHost", lane + " failed: " + err);
+                    toast(err);
+                    return;
+                }
+                LocalStore.logEvent(this, "HOSTING " + lane + " OK — " + okUrl);
                 fillHostLane(lane, okUrl, null);
                 toast("Uploaded ✓ — URL filled");
             });
@@ -3822,9 +3925,14 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         final Hosting.Profile p = HostingStore.getDefault(this);
         if (p == null) { toast("No hosting destination set"); return; }
         if (uris.size() != pendingHostPlateCount) {
-            toast("Pick exactly " + pendingHostPlateCount + " images (got " + uris.size() + ")");
+            LocalStore.logEvent(this, "HOSTING plates: picked " + uris.size() + " but need " + pendingHostPlateCount);
+            toast("Pick exactly " + pendingHostPlateCount + " images (got " + uris.size()
+                    + "). Set Editions to " + uris.size() + " first, or pick " + pendingHostPlateCount + ".");
             return;
         }
+        LocalStore.logEvent(this, "HOSTING plates start: type=" + p.type()
+                + " root=" + p.cfgStr("remoteRoot") + " prefix=" + p.cfgStr("urlPrefix")
+                + " dirTpl=" + p.dirTemplate());
         toast("Uploading " + uris.size() + " plates to " + p.name() + "…");
         new Thread(() -> {
             String result = null, base = null, ext = null;
@@ -3834,18 +3942,13 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 String coll = slugForHost();
                 String dirRel = Hosting.fillTemplate(p.dirTemplate(), mapOf(
                         "collection", coll, "ts", Hosting.ts36(), "rand", Hosting.rand4()));
-                String ext0 = null;
+                // every plate → display-grade JPEG, so the set is homogeneous
+                // (.jpg) by construction and bounded in size
+                ext = ".jpg";
                 for (int i = 0; i < uris.size(); i++) {
-                    byte[] bytes = readUri(uris.get(i));
-                    String mime = getContentResolver().getType(uris.get(i));
-                    if (mime == null) mime = "image/png";
-                    String e = extFromMime(mime);
-                    if (ext0 == null) ext0 = e;
-                    else if (!ext0.equals(e)) throw new Hosting.HostingException(
-                            "All plates must share one file type — got " + ext0 + " and " + e);
-                    files.add(new Hosting.Entry(bytes, dirRel + "/" + (i + 1) + e, mime));
+                    byte[] bytes = plateBytes(uris.get(i));
+                    files.add(new Hosting.Entry(bytes, dirRel + "/" + (i + 1) + ext, "image/jpeg"));
                 }
-                ext = ext0;
                 u = Hosting.forProfile(p);
                 if (u instanceof Hosting.DirUploader) {
                     base = ((Hosting.DirUploader) u).putDirectory(files, null);
@@ -3861,13 +3964,20 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             } catch (Hosting.HostingException e) {
                 result = e.getMessage();
             } catch (Throwable t) {
-                result = "upload failed: " + t.getClass().getSimpleName();
+                result = "upload failed: " + t.getClass().getSimpleName()
+                        + (t.getMessage() == null ? "" : " — " + t.getMessage());
             } finally {
                 if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
             }
             final String err = result, okBase = base, okExt = ext;
             main.post(() -> {
-                if (err != null) { toast(err); return; }
+                if (err != null) {
+                    LocalStore.logEvent(this, "HOSTING plates FAILED: " + err);
+                    android.util.Log.e("AtelierHost", "plates failed: " + err);
+                    toast(err);
+                    return;
+                }
+                LocalStore.logEvent(this, "HOSTING plates OK — base " + okBase);
                 createBase = okBase;
                 createExt = okExt;
                 createMode = "url";
@@ -3895,18 +4005,38 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         return Hosting.slug(n);
     }
 
+    private static final long HOST_HARD_CAP = 60L * 1024 * 1024;
+
+    /** Raw bytes for the full-res single lane (external URL). Generous cap so a
+     *  phone photo never trips it; null-safe. */
     private byte[] readUri(Uri uri) throws Exception {
         try (java.io.InputStream in = getContentResolver().openInputStream(uri);
              java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            if (in == null) throw new Exception("could not open the image");
             byte[] buf = new byte[8192];
-            int n, total = 0;
+            int n; long total = 0;
             while ((n = in.read(buf)) > 0) {
                 total += n;
-                if (total > 12 * 1024 * 1024) throw new Exception("image over 12MB");
+                if (total > HOST_HARD_CAP) throw new Exception("image is over 60MB");
                 bos.write(buf, 0, n);
             }
             return bos.toByteArray();
         }
+    }
+
+    /** A collection plate for hosting: display-grade JPEG, long edge ≤ 2048.
+     *  "Processed and sent" per the brief — the on-chain record only points at
+     *  the URL, so multi-MB sensor dumps buy nothing and make 20-plate uploads
+     *  crawl. Falls back to raw bytes if decoding fails. */
+    private byte[] plateBytes(Uri uri) throws Exception {
+        android.graphics.Bitmap bmp = ImageTools.boundedBitmap(this, uri, 2048);
+        if (bmp != null) {
+            java.io.ByteArrayOutputStream jbos = new java.io.ByteArrayOutputStream();
+            if (bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, jbos) && jbos.size() > 0) {
+                return jbos.toByteArray();
+            }
+        }
+        return readUri(uri);
     }
 
     private static String extFromMime(String mime) {

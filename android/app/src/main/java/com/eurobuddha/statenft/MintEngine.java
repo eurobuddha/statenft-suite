@@ -38,6 +38,10 @@ public final class MintEngine {
             return;
         }
         JSONObject row = rows.optJSONObject(i);
+        // Auto-create the web-validation doc as soon as the tokenid is known —
+        // runs for DONE rows too, so it fires whether the mint is mid-flight
+        // or already finished (once; guarded by wvdone).
+        if (row != null) maybeCreateValidationDoc(ctx, row);
         String phase = row == null ? "DONE" : row.optString("phase", "DONE");
         if (row == null || "DONE".equals(phase) || "DAMAGED".equals(phase)
                 || "BURIED".equals(phase) || "BURY".equals(phase)) {
@@ -814,6 +818,44 @@ public final class MintEngine {
             }
             @Override public void onError(String message) { cb.fail(message); }
         });
+    }
+
+    /** Rows whose validation doc is currently uploading — prevents a second
+     *  tick from double-posting while the first is in flight. */
+    private static final java.util.Set<Long> WV_INFLIGHT =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+    /** If this collection opted into auto-creating its web-validation doc and
+     *  its tokenid is now known, upload a text file containing the tokenid to
+     *  the chosen hosting path — the exact bytes `tokenvalidate` needs. Once. */
+    static void maybeCreateValidationDoc(Context ctx, JSONObject row) {
+        if (row.optInt("wvauto", 0) != 1 || row.optInt("wvdone", 0) == 1) return;
+        final String tid = row.optString("tokenid", "");
+        final String rel = row.optString("wvrel", "");
+        if (tid.isEmpty() || rel.isEmpty()) return;
+        final long id = row.optLong("id");
+        if (!WV_INFLIGHT.add(id)) return;
+        new Thread(() -> {
+            Hosting.Uploader u = null;
+            try {
+                Hosting.Profile p = HostingStore.getDefault(ctx);
+                if (p == null) { LocalStore.logEvent(ctx, row.optString("name")
+                        + ": validation doc skipped — no hosting destination"); return; }
+                u = Hosting.forProfile(p);
+                u.putFile(tid.getBytes(java.nio.charset.StandardCharsets.UTF_8), rel, "text/plain");
+                put(row, "wvdone", 1);
+                LocalStore.upsert(ctx, row);
+                LocalStore.logEvent(ctx, row.optString("name")
+                        + ": validation doc written with tokenid → " + rel);
+            } catch (Throwable t) {
+                LocalStore.logEvent(ctx, row.optString("name")
+                        + ": validation doc upload failed (will retry next block): "
+                        + (t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()));
+            } finally {
+                if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
+                WV_INFLIGHT.remove(id);
+            }
+        }).start();
     }
 
     private static void setPhase(Context ctx, JSONObject row, String phase, Done done) {

@@ -1338,7 +1338,9 @@ function mintCollection() {
   if (mode === "url") { hostUrls.push(base + "1" + ext); hostUrls.push(base + size + ext); }
   if (iconurl && iconurl.indexOf("http") === 0) hostUrls.push(iconurl);
   if (externalurl) hostUrls.push(externalurl);
-  if (webvalidate) hostUrls.push(webvalidate);
+  // web-validation URL is NOT gated: the proof doc is usually created AFTER
+  // mint (it must contain the tokenid, which only exists then). Absent = "not
+  // yet validated", never a blocked mint.
   if (hostUrls.length && !mintCollection._hostVerified) {
     status.innerText = "verifying hosted URLs…";
     HOSTING.verify(hostUrls, function (err) {
