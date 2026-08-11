@@ -195,11 +195,13 @@ public final class ImageTools {
     }
 
     private static String compressIconBitmap(Bitmap sq, int budget) {
-        int[] dims = {512, 400, 320, 240, 180};
+        // reach the floor: a 180px/q60 stop failed busy uploads against the
+        // 6000-char icon budget, silently falling back to plate 1 (2026-08-11)
+        int[] dims = {512, 400, 320, 240, 180, 140, 120};
         for (int dim : dims) {
             int side = Math.min(dim, sq.getWidth());
             Bitmap scaled = Bitmap.createScaledBitmap(sq, side, side, true);
-            for (int quality = 88; quality >= 60; quality -= 10) {
+            for (int quality = 88; quality >= 44; quality -= 8) {
                 String b64 = encode(scaled, quality);
                 if (!b64.isEmpty() && b64.length() <= budget) return b64;
             }

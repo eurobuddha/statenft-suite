@@ -1355,7 +1355,23 @@ function mintCollection() {
       if (env.ok) { cb(env); return; }   // hosted/no icon: nothing to shed
       status.innerText = env.error; cb(null); return;
     }
-    reshrinkB64(raw, 2000, function (slim) {
+    /* Slim the icon to the room ACTUALLY spare once the plates get theirs —
+     * a hardcoded target below the shrink floor dropped a chosen icon and
+     * showed plate 1 instead (2026-08-11). */
+    var envNoIcon = engineEnvelope(JSON.stringify(
+      artExactMeta(name, desc, size, "", externalurl, null)).length);
+    var iconAllow = envNoIcon.ok ? envNoIcon.imageBudget - need : 0;
+    function dropIcon() {
+      icon = "";
+      if (envNoIcon.ok) {
+        toast("icon dropped so the plates keep their room — wallet shows the identicon");
+        cb(envNoIcon); return;
+      }
+      status.innerText = envNoIcon.error + " — even without an icon; shorten the description";
+      cb(null);
+    }
+    if (iconAllow < 800) { dropIcon(); return; }
+    reshrinkB64(raw, Math.min(iconAllow, 6000), function (slim) {
       if (slim) {
         var icon2 = slim + "</artimage>";
         var e2 = engineEnvelope(JSON.stringify(
@@ -1366,15 +1382,7 @@ function mintCollection() {
           cb(e2); return;
         }
       }
-      icon = "";
-      var e3 = engineEnvelope(JSON.stringify(
-        artExactMeta(name, desc, size, "", externalurl, null)).length);
-      if (e3.ok) {
-        toast("icon dropped so the plates keep their room — wallet shows the identicon");
-        cb(e3); return;
-      }
-      status.innerText = e3.error + " — even without an icon; shorten the description";
-      cb(null);
+      dropIcon();
     });
   }
   function fitted(next2) {

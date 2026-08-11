@@ -1616,7 +1616,21 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                         if (im0 != null) need = Math.max(need, Math.min(im0.length(), PLATE_MIN_ROOM));
                     }
                     if (room < need && !m.icon.isEmpty() && !m.icon.startsWith("http")) {
-                        String slim = ImageTools.recompressBase64(m.icon, 2000);
+                        /* Slim the icon to the room ACTUALLY spare once the
+                         * plates get theirs — a hardcoded 2000 sat below the
+                         * deep ladder's floor for busy images, so a chosen
+                         * icon got dropped and plate 1 showed instead
+                         * (2026-08-11). */
+                        String iconSave = m.icon;
+                        m.icon = "";
+                        JSONObject metaNoIcon = StateNft.tokenMetadata(m);
+                        if (collectionItemTraits != null && collectionItemTraits.length() > 0)
+                            put(metaNoIcon, "traits", collectionItemTraits);
+                        int iconAllow = MintEngine.imageBudget(metaNoIcon.toString().length()) - need;
+                        m.icon = iconSave;
+                        String slim = iconAllow >= 800
+                                ? ImageTools.iconFromBase64(m.icon, Math.min(iconAllow, ImageTools.ICON_BUDGET))
+                                : "";
                         if (!slim.isEmpty()) {
                             m.icon = slim;
                             metaJ = StateNft.tokenMetadata(m);
