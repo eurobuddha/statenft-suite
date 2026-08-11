@@ -207,6 +207,13 @@ public final class ImageTools {
             }
             if (scaled != sq) scaled.recycle();
         }
+        // last resort — same law as compressBitmap: raster always fits
+        for (int dim = 90; dim >= 16; dim /= 2) {
+            int side = Math.min(dim, sq.getWidth());
+            Bitmap scaled = Bitmap.createScaledBitmap(sq, Math.max(1, side), Math.max(1, side), true);
+            String b64 = encode(scaled, 40);
+            if (!b64.isEmpty() && b64.length() <= budget) return b64;
+        }
         return "";
     }
 
@@ -252,6 +259,17 @@ public final class ImageTools {
                 }
             }
             if (scaled != src) scaled.recycle();
+        }
+        // Last resort: halve dimensions at floor quality until it fits.
+        // "Raster always fits" is a law, not an aspiration (2026-08-11) —
+        // every fixed slim target in the app relies on this never failing.
+        for (int dim = 100; dim >= 16; dim /= 2) {
+            float scale = Math.min(1f, dim / (float) Math.max(src.getWidth(), src.getHeight()));
+            Bitmap scaled = Bitmap.createScaledBitmap(src,
+                    Math.max(1, Math.round(src.getWidth() * scale)),
+                    Math.max(1, Math.round(src.getHeight() * scale)), true);
+            String b64 = encode(scaled, 40);
+            if (!b64.isEmpty() && b64.length() <= budget) return b64;
         }
         return "";
     }

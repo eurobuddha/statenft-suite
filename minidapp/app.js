@@ -1275,6 +1275,17 @@ function reshrinkB64(b64, budget, cb) {
         if (out.length <= budget) { cb(out); return; }
       }
     }
+    /* last resort: halve dimensions at floor quality until it fits —
+     * "raster always fits" is a law; every slim target relies on it */
+    for (var dd = 100; dd >= 16; dd = Math.floor(dd / 2)) {
+      var s2 = Math.min(1, dd / Math.max(img.width, img.height));
+      var cv2 = document.createElement("canvas");
+      cv2.width = Math.max(1, Math.round(img.width * s2));
+      cv2.height = Math.max(1, Math.round(img.height * s2));
+      cv2.getContext("2d").drawImage(img, 0, 0, cv2.width, cv2.height);
+      var out2 = cv2.toDataURL("image/jpeg", 0.35).split(",")[1];
+      if (out2.length <= budget) { cb(out2); return; }
+    }
     cb(null);
   };
   img.onerror = function () { cb(null); };
