@@ -43,7 +43,7 @@ import java.util.Locale;
  */
 public class MainActivity extends AppCompatActivity implements ViewerScreen.Host {
 
-    private enum Screen { LAUNCH, GALLERY, COLLECTION, STUDIO, CREATE_COLLECTION, CREATE_NFT, CREATE_TOKEN, CREATE_GENERATIVE, AIRDROP, TRANSFER, BURY, MANAGE, SCAN, ENGINE_LOG }
+    private enum Screen { LAUNCH, GALLERY, COLLECTION, STUDIO, CREATE_COLLECTION, CREATE_NFT, CREATE_TOKEN, CREATE_GENERATIVE, AIRDROP, TRANSFER, BURY, MANAGE, SCAN, ENGINE_LOG, HOSTING, HOSTING_EDIT }
 
     private static final int PICK_CREATE = 1;
     private static final int PICK_RECOVERY = 2;
@@ -51,6 +51,13 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private static final int PICK_TOKICON = 5;
     private static final int PICK_COLLICON = 6;
     private static final int PICK_ARTPHOTO = 7;
+    private static final int PICK_HOST_ICON = 8;      // upload → an icon-URL field
+    private static final int PICK_HOST_EXTERNAL = 9;  // upload → an external/image-URL field
+    private static final int PICK_HOST_PLATES = 10;   // upload N → url-mode base+ext
+    /** which lane the current hosting upload fills: "collicon"/"collext"/
+     *  "collplates"/"nfturl"/"nftext"/"tokicon" */
+    private String pendingHostLane = "";
+    private Hosting.Profile hostEditProfile;          // profile being edited
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayList<StateNft.Meta> collections = new ArrayList<>();
@@ -1476,6 +1483,12 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             baseF[0].addTextChangedListener(watch(sv -> createBase = sv));
             extF[0] = fieldInto(body, "Extension", ".png", createExt);
             extF[0].addTextChangedListener(watch(sv -> createExt = sv));
+            final EditText sizeField = size;
+            body.addView(hostingUploadRow("collplates",
+                    "Upload plates to hosting → auto-fill base URL",
+                    () -> { saveCollectionDraft(name, desc, size, baseF[0], extF[0], iconF[0], extUrlF[0], webF[0]);
+                            pickHostPlates(clampSize(parseIntSafe(sizeField.getText().toString()))); }),
+                    lpm(0, 6, 0, 0));
         } else {
             int n = clampSize(parseIntSafe(size.getText().toString()));
             ensureCreateImages(n);
@@ -1514,11 +1527,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
         iconF[0] = fieldInto(body, "Icon URL (optional)", "https://…/icon.png — wallets show this", createIcon);
         iconF[0].addTextChangedListener(watch(sv -> createIcon = sv));
+        body.addView(hostingUploadRow("collicon", "Upload an icon photo to hosting",
+                () -> { saveCollectionDraft(name, desc, size, baseF[0], extF[0], iconF[0], extUrlF[0], webF[0]);
+                        pickHostSingle(PICK_HOST_ICON, "collicon"); }), lpm(0, 4, 0, 0));
         body.addView(iconUploadRow(createIconB64, "Or embed a wallet icon (first plate is used if neither is set)",
                 v -> { pendingPickContext = PICK_COLLICON; pendingBatchImages = false; launchPicker(false); },
                 v -> { createIconB64 = ""; renderCreateCollection(); }), lpm(0, 4, 0, 8));
         extUrlF[0] = fieldInto(body, "External URL (optional)", "https://…", createExternal);
         extUrlF[0].addTextChangedListener(watch(sv -> createExternal = sv));
+        body.addView(hostingUploadRow("collext", "Upload full-res photo to hosting",
+                () -> { saveCollectionDraft(name, desc, size, baseF[0], extF[0], iconF[0], extUrlF[0], webF[0]);
+                        pickHostSingle(PICK_HOST_EXTERNAL, "collext"); }), lpm(0, 4, 0, 0));
         webF[0] = fieldInto(body, "Web validate URL (optional)", "https://…/validate", createWeb);
         webF[0].addTextChangedListener(watch(sv -> createWeb = sv));
 
@@ -1561,6 +1580,20 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 }
             }
         }
+        // verify-before-mint: every hosted URL the mint will seal must serve
+        if (!hostGatePassed) {
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            if ("url".equals(createMode)) { urls.add(bs + "1" + x); urls.add(bs + count + x); }
+            if (!ic.isEmpty() && ic.startsWith("http")) urls.add(ic);
+            if (!ex.isEmpty()) urls.add(ex);
+            if (!w.isEmpty()) urls.add(w);
+            if (!urls.isEmpty()) {
+                verifyHostedThen(urls, () -> { hostGatePassed = true;
+                        createCollection(name, desc, size, base, ext, icon, external, web); });
+                return;
+            }
+        }
+        hostGatePassed = false;
         final String bsF = bs, icF = ic, exF = ex, wF = w, nF = n, dF = d;
         final int countF = count;
         node.cmd("getaddress", new NodeApi.Cb() {
@@ -1746,6 +1779,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         } else {
             EditText urlF = fieldInto(body, "Image URL", "https://… or ipfs://…", nftUrl);
             urlF.addTextChangedListener(watch(sv -> nftUrl = sv));
+            body.addView(hostingUploadRow("nfturl", "Upload artwork to hosting",
+                    () -> pickHostSingle(PICK_HOST_EXTERNAL, "nfturl")), lpm(0, 4, 0, 0));
         }
 
         EditText nameF = fieldInto(body, "Title", "Nocturne 04", nftName);
@@ -1758,6 +1793,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         edF.addTextChangedListener(watch(sv -> nftEditions = sv));
         EditText extF = fieldInto(body, "External URL (optional)", "https://…", nftExternal);
         extF.addTextChangedListener(watch(sv -> nftExternal = sv));
+        body.addView(hostingUploadRow("nftext", "Upload full-res photo to hosting",
+                () -> pickHostSingle(PICK_HOST_EXTERNAL, "nftext")), lpm(0, 4, 0, 0));
         EditText webF = fieldInto(body, "Web validate URL (optional)", "https://…/validate", nftWeb);
         webF.addTextChangedListener(watch(sv -> nftWeb = sv));
 
@@ -1862,6 +1899,14 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             if (url.isEmpty() || !validCmdUrl(url)) { toast("Image URL required — no spaces, quotes or semicolons"); return; }
         }
         if (!validCmdUrl(nftExternal.trim()) || !validCmdUrl(nftWeb.trim())) { toast("URLs must not contain spaces, quotes or semicolons"); return; }
+        if (!hostGatePassed) {
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            if (!nftEmbed && nftUrl.trim().startsWith("http")) urls.add(nftUrl.trim());
+            if (!nftExternal.trim().isEmpty()) urls.add(nftExternal.trim());
+            if (!nftWeb.trim().isEmpty()) urls.add(nftWeb.trim());
+            if (!urls.isEmpty()) { verifyHostedThen(urls, () -> { hostGatePassed = true; mintNft(go); }); return; }
+        }
+        hostGatePassed = false;
         nftBusy = true;
         go.setText("MINTING…");
         NodeApi.Cb fin = new NodeApi.Cb() {
@@ -1947,6 +1992,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         descF.addTextChangedListener(watch(sv -> tokDesc = sv));
         EditText urlF = fieldInto(body, "Icon URL (optional)", "https://…/icon.png", tokUrl);
         urlF.addTextChangedListener(watch(sv -> tokUrl = sv));
+        body.addView(hostingUploadRow("tokicon", "Upload an icon photo to hosting",
+                () -> pickHostSingle(PICK_HOST_ICON, "tokicon")), lpm(0, 4, 0, 0));
         body.addView(iconUploadRow(tokIcon, "Wallet icon — hosted URL above beats an upload",
                 v -> { pendingPickContext = PICK_TOKICON; pendingBatchImages = false; launchPicker(false); },
                 v -> { tokIcon = ""; renderCreateToken(); }), lpm(0, 4, 0, 8));
@@ -2022,6 +2069,13 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         int dec = parseIntSafe(tokDecimals.trim());
         if (dec < 0 || dec > 16) { toast("Decimals must be 0–16"); return; }
         if (!validCmdUrl(tokUrl.trim())) { toast("Icon URL must not contain spaces, quotes or semicolons"); return; }
+        if (!hostGatePassed && tokUrl.trim().startsWith("http")) {
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            urls.add(tokUrl.trim());
+            verifyHostedThen(urls, () -> { hostGatePassed = true; mintToken(go); });
+            return;
+        }
+        hostGatePassed = false;
         tokBusy = true;
         go.setText("MINTING…");
         String iconValue = !tokUrl.trim().isEmpty() ? tokUrl.trim()
@@ -2920,12 +2974,234 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         walletCard.addView(scanB, lph(48, 0, 0, 0, 0));
         body.addView(walletCard, lpm(0, 0, 0, 14));
 
+        LinearLayout hostCard = lotCard();
+        hostCard.addView(Design.lot(this, "Hosting"));
+        hostCard.addView(Design.note(this, "Upload chosen photos to your own storage and auto-fill the mint's hosted URLs — SFTP, WebDAV, IPFS or GitHub."), lpm(0, 4, 0, 8));
+        Hosting.Profile def = HostingStore.getDefault(this);
+        hostCard.addView(kvRow("Default", def == null ? "none yet" : def.name() + " · " + def.type()));
+        TextView hostBtn = Design.button(this, "Manage destinations", true);
+        hostBtn.setOnClickListener(v -> renderHosting());
+        hostCard.addView(hostBtn, lph(48, 0, 8, 0, 0));
+        body.addView(hostCard, lpm(0, 0, 0, 14));
+
         LinearLayout appCard = lotCard();
         appCard.addView(Design.lot(this, "Colophon"));
         appCard.addView(kvRow("App", "Atelier — StateNFT Studio"));
         appCard.addView(kvRow("Version", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")"));
         appCard.addView(kvRow("Package", getPackageName()));
         body.addView(appCard, lpm(0, 0, 0, 14));
+    }
+
+    /* ================= HOSTING ================= */
+
+    private void renderHosting() {
+        setScreen(Screen.HOSTING, this::renderManage);
+        appbar("Hosting", true, false);
+
+        java.util.List<Hosting.Profile> profiles = HostingStore.list(this);
+        if (profiles.isEmpty()) {
+            LinearLayout empty = lotCard();
+            empty.addView(Design.note(this, "No destinations yet. Add one and Atelier can upload photos and fill every hosted URL for you.\n\nNo server? Create a free Pinata account, paste the JWT, and your art pins to IPFS with public links."));
+            body.addView(empty, lpm(0, 0, 0, 12));
+        }
+        for (Hosting.Profile p : profiles) {
+            LinearLayout card = lotCard();
+            LinearLayout head = horizontal(Gravity.CENTER_VERTICAL);
+            head.addView(Design.text(this, p.name().isEmpty() ? "(unnamed)" : p.name(), 15, Design.INK(), Design.sansBold()),
+                    new LinearLayout.LayoutParams(0, -2, 1));
+            head.addView(Design.pill(this, p.type(), Design.PILL_DIM));
+            if (p.isDefault()) head.addView(Design.pill(this, "default", Design.PILL_DONE));
+            card.addView(head, lpm(0, 0, 0, 8));
+            LinearLayout row = horizontal(Gravity.CENTER_VERTICAL);
+            TextView test = Design.button(this, "Test", false);
+            test.setOnClickListener(v -> testProfile(p));
+            row.addView(test, weight(31, 0, 4));
+            TextView edit = Design.button(this, "Edit", false);
+            edit.setOnClickListener(v -> renderHostingEdit(p));
+            row.addView(edit, weight(31, 4, 4));
+            TextView del = Design.button(this, "Delete", false);
+            del.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                    .setTitle("Delete " + p.name() + "?")
+                    .setPositiveButton("Delete", (d, w) -> { HostingStore.remove(this, p.id()); renderHosting(); })
+                    .setNegativeButton("Keep", null).show());
+            row.addView(del, weight(31, 4, 0));
+            card.addView(row, lpm(0, 0, 0, 6));
+            if (!p.isDefault()) {
+                TextView mkDef = Design.button(this, "Make default", false);
+                mkDef.setOnClickListener(v -> { HostingStore.setDefault(this, p.id()); renderHosting(); });
+                card.addView(mkDef, lph(42, 0, 0, 0, 0));
+            }
+            body.addView(card, lpm(0, 0, 0, 12));
+        }
+        TextView add = Design.button(this, "Add destination", true);
+        add.setOnClickListener(v -> renderHostingEdit(null));
+        body.addView(add, lph(52, 0, 4, 0, 8));
+    }
+
+    private static final String[] HOST_TYPES = { Hosting.TYPE_SFTP, Hosting.TYPE_WEBDAV,
+            Hosting.TYPE_KUBO, Hosting.TYPE_PINATA, Hosting.TYPE_GITHUB };
+    private static final String[] HOST_TYPE_LABELS = { "SFTP", "WebDAV", "IPFS node", "Pinata", "GitHub" };
+
+    private void renderHostingEdit(Hosting.Profile existing) {
+        setScreen(Screen.HOSTING_EDIT, this::renderHosting);
+        appbar(existing == null ? "Add destination" : "Edit destination", true, false);
+        hostEditProfile = existing != null ? existing
+                : Hosting.Profile.fresh(Hosting.TYPE_SFTP);
+
+        EditText nameF = fieldInto(body, "Name", "e.g. my server", hostEditProfile.name());
+        nameF.addTextChangedListener(watch(sv -> Hosting.put(hostEditProfile.j, "name", sv)));
+
+        body.addView(Design.kicker(this, "Type"), lpm(0, 10, 0, 5));
+        LinearLayout chips = horizontal(Gravity.CENTER_VERTICAL);
+        chips.setPadding(0, 0, 0, dp(4));
+        for (int i = 0; i < HOST_TYPES.length; i++) {
+            final String t = HOST_TYPES[i];
+            TextView chip = Design.chip(this, HOST_TYPE_LABELS[i], t.equals(hostEditProfile.type()));
+            chip.setOnClickListener(v -> {
+                if (!t.equals(hostEditProfile.type())) {
+                    Hosting.put(hostEditProfile.j, "type", t);
+                    if (hostEditProfile.j.optJSONObject(t) == null) Hosting.put(hostEditProfile.j, t, new org.json.JSONObject());
+                    renderHostingEdit(hostEditProfile);
+                }
+            });
+            chip.setPadding(dp(12), dp(6), dp(12), dp(6));
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+            clp.rightMargin = dp(6);
+            chips.addView(chip, clp);
+        }
+        android.widget.HorizontalScrollView chipScroll = new android.widget.HorizontalScrollView(this);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        chipScroll.addView(chips);
+        body.addView(chipScroll, lpm(0, 0, 0, 4));
+
+        org.json.JSONObject cfg = hostEditProfile.cfg();
+        switch (hostEditProfile.type()) {
+            case Hosting.TYPE_SFTP:
+                hostField(cfg, "host", "Host", "eurobuddha.com", false);
+                hostField(cfg, "port", "Port", "22", false);
+                hostField(cfg, "user", "User", "root", false);
+                hostField(cfg, "password", "Password", "••••••", true);
+                hostField(cfg, "remoteRoot", "Remote folder", "/var/www/html/", false);
+                hostField(cfg, "urlPrefix", "Public URL prefix", "https://eurobuddha.com/", false);
+                body.addView(Design.note(this, "Password auth shown. Paste a private key into Password? Not yet — v1 is password. First connect asks you to confirm the server's fingerprint."), lpm(0, 8, 0, 0));
+                break;
+            case Hosting.TYPE_WEBDAV:
+                hostField(cfg, "endpoint", "WebDAV write endpoint", "https://dav.example.com/files/", false);
+                hostField(cfg, "user", "User", "", false);
+                hostField(cfg, "password", "Password", "••••••", true);
+                hostField(cfg, "urlPrefix", "Public URL prefix", "https://example.com/files/", false);
+                break;
+            case Hosting.TYPE_KUBO:
+                hostField(cfg, "apiUrl", "kubo API", "http://192.168.1.10:5001", false);
+                hostField(cfg, "gateway", "Public gateway", "https://ipfs.eurobuddha.com", false);
+                body.addView(Design.note(this, "Uploads use /api/v0/add and pin. Files get a content CID; a url-mode collection becomes one directory CID."), lpm(0, 8, 0, 0));
+                break;
+            case Hosting.TYPE_PINATA:
+                hostField(cfg, "jwt", "Pinata JWT", "eyJ… (free-tier key)", true);
+                hostField(cfg, "gateway", "Gateway (optional)", "https://gateway.pinata.cloud", false);
+                body.addView(Design.note(this, "No server needed — a free Pinata account pins your art to IPFS with public links."), lpm(0, 8, 0, 0));
+                break;
+            case Hosting.TYPE_GITHUB:
+                hostField(cfg, "owner", "Owner", "eurobuddha", false);
+                hostField(cfg, "repo", "Repo", "nft-assets", false);
+                hostField(cfg, "branch", "Branch", "main", false);
+                hostField(cfg, "token", "Personal access token", "ghp_…", true);
+                hostField(cfg, "serve", "Serve via (raw / pages)", "raw", false);
+                hostField(cfg, "pagesPrefix", "Pages prefix (if pages)", "https://you.github.io/nft-assets/", false);
+                break;
+        }
+
+        LinearLayout actions = horizontal(Gravity.CENTER_VERTICAL);
+        TextView save = Design.button(this, "Save", true);
+        save.setOnClickListener(v -> {
+            if (hostEditProfile.name().isEmpty()) { toast("Give the destination a name"); return; }
+            HostingStore.upsert(this, hostEditProfile);
+            if (HostingStore.getDefault(this) == null || HostingStore.list(this).size() == 1) {
+                HostingStore.setDefault(this, hostEditProfile.id());
+            }
+            toast("Saved");
+            renderHosting();
+        });
+        actions.addView(save, weight(48, 0, 4));
+        TextView testB = Design.button(this, "Save & test", false);
+        testB.setOnClickListener(v -> {
+            if (hostEditProfile.name().isEmpty()) { toast("Give the destination a name"); return; }
+            HostingStore.upsert(this, hostEditProfile);
+            testProfile(hostEditProfile);
+        });
+        actions.addView(testB, weight(48, 4, 0));
+        body.addView(actions, lph(52, 0, 12, 0, 8));
+    }
+
+    /** A hosting-config field; SECRET fields are wrapped via Crypt on change
+     *  and shown as a password input. */
+    private void hostField(org.json.JSONObject cfg, String key, String label, String hint, boolean secret) {
+        boolean isSecret = secret;
+        String cur = cfg.optString(key, "");
+        String shown = isSecret ? "" : cur;   // never re-display a stored secret
+        EditText e = fieldInto(body, label, isSecret && !cur.isEmpty() ? "•••••• (stored — type to replace)" : hint, shown);
+        if (isSecret) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        e.addTextChangedListener(watch(sv -> {
+            if (isSecret) {
+                if (!sv.isEmpty()) Hosting.put(cfg, key, Crypt.encrypt(sv));
+            } else {
+                Hosting.put(cfg, key, sv);
+            }
+        }));
+    }
+
+    private void testProfile(Hosting.Profile p) {
+        toast("Testing " + p.name() + "…");
+        new Thread(() -> {
+            String result;
+            try {
+                String nonce = "atelier-" + System.currentTimeMillis();
+                String rel = Hosting.fillTemplate("atelier/probe/{ts}-{rand}.txt",
+                        mapOf("ts", Hosting.ts36(), "rand", Hosting.rand4()));
+                Hosting.Uploader u = Hosting.forProfile(p);
+                String url;
+                if (u instanceof Hosting.DirUploader && (Hosting.TYPE_KUBO.equals(p.type()) || Hosting.TYPE_PINATA.equals(p.type()))) {
+                    url = u.putFile(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8), rel, "text/plain");
+                } else {
+                    url = u.putFile(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8), rel, "text/plain");
+                }
+                if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
+                // fetch-back leg
+                Hosting.verifyUrl(url, p);
+                result = "uploaded ✓ · fetched ✓\n" + url;
+            } catch (SftpUploader.HostKeyUnverified hk) {
+                main.post(() -> confirmHostKey(p, hk.fingerprint));
+                return;
+            } catch (Hosting.HostingException e) {
+                result = "failed: " + e.getMessage();
+            } catch (Throwable t) {
+                result = "failed: " + t.getClass().getSimpleName();
+            }
+            final String r = result;
+            main.post(() -> new android.app.AlertDialog.Builder(this)
+                    .setTitle("Test — " + p.name())
+                    .setMessage(r)
+                    .setPositiveButton("OK", null).show());
+        }).start();
+    }
+
+    private void confirmHostKey(Hosting.Profile p, String fp) {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Verify server host key")
+                .setMessage("First connection to this server. Confirm its fingerprint matches your server:\n\n" + fp
+                        + "\n\nOnly accept if this is YOUR server.")
+                .setPositiveButton("Trust & pin", (d, w) -> {
+                    Hosting.put(p.cfg(), "hostKeyFp", fp);
+                    HostingStore.upsert(this, p);
+                    testProfile(p);
+                })
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private java.util.Map<String, String> mapOf(String... kv) {
+        java.util.HashMap<String, String> m = new java.util.HashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
+        return m;
     }
 
     /* ================= SCAN ================= */
@@ -3439,6 +3715,212 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         startActivityForResult(Intent.createChooser(i, "Choose image"), 7001);
     }
 
+    /* ---- hosting upload rows + lanes ---- */
+
+    /** A "Upload to hosting…" button; disabled with guidance when there is no
+     *  default destination. */
+    private View hostingUploadRow(String lane, String label, Runnable onTap) {
+        boolean ready = HostingStore.getDefault(this) != null;
+        TextView b = Design.button(this, ready ? label : "Set up hosting in Manage → Hosting", false);
+        if (ready) {
+            b.setOnClickListener(v -> onTap.run());
+        } else {
+            b.setOnClickListener(v -> renderHosting());
+        }
+        return b;
+    }
+
+    private boolean hostGatePassed = false;
+
+    /** Verify every hosted URL the mint will seal, off the main thread, then
+     *  run onOk on the main thread. Any failure names the exact URL. */
+    private void verifyHostedThen(java.util.List<String> urls, Runnable onOk) {
+        toast("Verifying hosted URLs…");
+        final Hosting.Profile p = HostingStore.getDefault(this);
+        new Thread(() -> {
+            String bad = null;
+            for (String u : urls) {
+                try { Hosting.verifyUrl(u, p); }
+                catch (Hosting.HostingException e) { bad = e.getMessage(); break; }
+                catch (Throwable t) { bad = "URL unreachable: " + u; break; }
+            }
+            final String err = bad;
+            main.post(() -> { if (err != null) toast(err); else onOk.run(); });
+        }).start();
+    }
+
+    private void pickHostSingle(int context, String lane) {
+        pendingPickContext = context;
+        pendingHostLane = lane;
+        pendingBatchImages = false;
+        launchPicker(false);
+    }
+
+    private void pickHostPlates(int count) {
+        pendingPickContext = PICK_HOST_PLATES;
+        pendingHostLane = "collplates";
+        pendingHostPlateCount = count;
+        pendingBatchImages = true;
+        launchPicker(true);
+    }
+
+    private int pendingHostPlateCount = 0;
+
+    /** Runs the upload off the main thread, fills the target field on success,
+     *  reports honestly on failure. Single-file lanes only. */
+    private void hostUploadSingle(int context, String lane, Uri uri) {
+        final Hosting.Profile p = HostingStore.getDefault(this);
+        if (p == null) { toast("No hosting destination set"); return; }
+        toast("Uploading to " + p.name() + "…");
+        new Thread(() -> {
+            String result = null, url = null;
+            Hosting.Uploader u = null;
+            try {
+                byte[] bytes; String mime;
+                if (context == PICK_HOST_ICON) {
+                    android.graphics.Bitmap sq = ImageTools.squareBitmap(this, uri, 512);
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    sq.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 85, bos);
+                    bytes = bos.toByteArray();
+                    mime = "image/webp";
+                } else {
+                    bytes = readUri(uri);
+                    mime = getContentResolver().getType(uri);
+                    if (mime == null) mime = "application/octet-stream";
+                }
+                String ext = extFromMime(mime);
+                String coll = slugForHost();
+                String rel = Hosting.fillTemplate(p.pathTemplate(), mapOf(
+                        "collection", coll, "name", lane, "ext", ext,
+                        "ts", Hosting.ts36(), "rand", Hosting.rand4(), "idx", ""));
+                u = Hosting.forProfile(p);
+                if (u.exists(rel)) throw new Hosting.HostingException("Remote file already exists: " + rel);
+                url = u.putFile(bytes, rel, mime);
+                Hosting.verifyUrl(url, p);
+            } catch (SftpUploader.HostKeyUnverified hk) {
+                main.post(() -> confirmHostKey(p, hk.fingerprint));
+                return;
+            } catch (Hosting.HostingException e) {
+                result = e.getMessage();
+            } catch (Throwable t) {
+                result = "upload failed: " + t.getClass().getSimpleName();
+            } finally {
+                if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
+            }
+            final String err = result, okUrl = url;
+            main.post(() -> {
+                if (err != null) { toast(err); return; }
+                fillHostLane(lane, okUrl, null);
+                toast("Uploaded ✓ — URL filled");
+            });
+        }).start();
+    }
+
+    /** N plates → one directory (IPFS) or sequence (sftp/webdav/github) named
+     *  1..N + ext; fills base + ext. */
+    private void hostUploadPlates(ArrayList<Uri> uris) {
+        final Hosting.Profile p = HostingStore.getDefault(this);
+        if (p == null) { toast("No hosting destination set"); return; }
+        if (uris.size() != pendingHostPlateCount) {
+            toast("Pick exactly " + pendingHostPlateCount + " images (got " + uris.size() + ")");
+            return;
+        }
+        toast("Uploading " + uris.size() + " plates to " + p.name() + "…");
+        new Thread(() -> {
+            String result = null, base = null, ext = null;
+            Hosting.Uploader u = null;
+            try {
+                java.util.List<Hosting.Entry> files = new java.util.ArrayList<>();
+                String coll = slugForHost();
+                String dirRel = Hosting.fillTemplate(p.dirTemplate(), mapOf(
+                        "collection", coll, "ts", Hosting.ts36(), "rand", Hosting.rand4()));
+                String ext0 = null;
+                for (int i = 0; i < uris.size(); i++) {
+                    byte[] bytes = readUri(uris.get(i));
+                    String mime = getContentResolver().getType(uris.get(i));
+                    if (mime == null) mime = "image/png";
+                    String e = extFromMime(mime);
+                    if (ext0 == null) ext0 = e;
+                    else if (!ext0.equals(e)) throw new Hosting.HostingException(
+                            "All plates must share one file type — got " + ext0 + " and " + e);
+                    files.add(new Hosting.Entry(bytes, dirRel + "/" + (i + 1) + e, mime));
+                }
+                ext = ext0;
+                u = Hosting.forProfile(p);
+                if (u instanceof Hosting.DirUploader) {
+                    base = ((Hosting.DirUploader) u).putDirectory(files, null);
+                } else {
+                    base = Hosting.putSequence(u, p, dirRel, files, null);
+                }
+                // verify plate 1 and plate N
+                Hosting.verifyUrl(base + "1" + ext, p);
+                Hosting.verifyUrl(base + uris.size() + ext, p);
+            } catch (SftpUploader.HostKeyUnverified hk) {
+                main.post(() -> confirmHostKey(p, hk.fingerprint));
+                return;
+            } catch (Hosting.HostingException e) {
+                result = e.getMessage();
+            } catch (Throwable t) {
+                result = "upload failed: " + t.getClass().getSimpleName();
+            } finally {
+                if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
+            }
+            final String err = result, okBase = base, okExt = ext;
+            main.post(() -> {
+                if (err != null) { toast(err); return; }
+                createBase = okBase;
+                createExt = okExt;
+                createMode = "url";
+                toast("Uploaded ✓ — base URL filled");
+                renderCreateCollection();
+            });
+        }).start();
+    }
+
+    private void fillHostLane(String lane, String url, String ext) {
+        switch (lane) {
+            case "collicon": createIcon = url; renderCreateCollection(); break;
+            case "collext":  createExternal = url; renderCreateCollection(); break;
+            case "nfturl":   nftUrl = url; renderCreateNft(); break;
+            case "nftext":   nftExternal = url; renderCreateNft(); break;
+            case "tokicon":  tokUrl = url; renderCreateToken(); break;
+            default: break;
+        }
+    }
+
+    private String slugForHost() {
+        String n = createName != null && !createName.isEmpty() ? createName
+                : (nftName != null && !nftName.isEmpty() ? nftName
+                : (tokName != null && !tokName.isEmpty() ? tokName : "atelier"));
+        return Hosting.slug(n);
+    }
+
+    private byte[] readUri(Uri uri) throws Exception {
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int n, total = 0;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > 12 * 1024 * 1024) throw new Exception("image over 12MB");
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        }
+    }
+
+    private static String extFromMime(String mime) {
+        if (mime == null) return ".png";
+        switch (mime) {
+            case "image/jpeg": return ".jpg";
+            case "image/png":  return ".png";
+            case "image/webp": return ".webp";
+            case "image/gif":  return ".gif";
+            case "image/svg+xml": return ".svg";
+            default: return ".png";
+        }
+    }
+
     private int firstMissingLocalImageIndex(StateNft.Meta m) {
         if (m == null) return 1;
         JSONObject row = LocalStore.findById(this, m.localId);
@@ -3467,6 +3949,14 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 android.graphics.Bitmap big = ImageTools.squareBitmap(this, photoUri, 512);
                 artPhotoFromBitmap(big);
             }).start();
+            return;
+        }
+        if (context == PICK_HOST_ICON || context == PICK_HOST_EXTERNAL) {
+            hostUploadSingle(context, pendingHostLane, uris.get(0));
+            return;
+        }
+        if (context == PICK_HOST_PLATES) {
+            hostUploadPlates(uris);
             return;
         }
         int budget = context == PICK_NFT ? ImageTools.ARTIMAGE_BUDGET

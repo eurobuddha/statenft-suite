@@ -10,8 +10,8 @@ android {
         applicationId "com.eurobuddha.statenft"
         minSdk 28
         targetSdk 35
-        versionCode 510
-        versionName "0.5.10"
+        versionCode 600
+        versionName "0.6.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -56,6 +56,13 @@ android {
     buildFeatures {
         buildConfig true
     }
+
+    packaging {
+        // jsch and jspecify both ship this OSGi metadata; neither is needed at runtime
+        resources {
+            excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF', 'META-INF/DEPENDENCIES']
+        }
+    }
 }
 
 dependencies {
@@ -67,6 +74,9 @@ dependencies {
     implementation 'com.caverock:androidsvg-aar:1.4'
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.20.0'
 
+    // SFTP for the Hosting feature — maintained JSch fork (modern KEX for
+    // current OpenSSH; stock jcraft 0.1.55 cannot connect to Debian 12+)
+    implementation 'com.github.mwiede:jsch:0.2.21'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
     // real codecs for the raster-always-fits ladder test (native graphics)

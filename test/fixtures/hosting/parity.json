@@ -1,0 +1,59 @@
+{
+  "comment": "Shared parity fixtures — HostingTest.java (Android) and hosting.test.js (MDS) both assert every case, so slug/template/publicUrl/kubo-parse can never drift between clients.",
+  "slug": [
+    { "in": "Trois Jours à Paris", "out": "trois-jours-a-paris" },
+    { "in": "  Hello,  World!! ", "out": "hello-world" },
+    { "in": "ALLCAPS-123", "out": "allcaps-123" },
+    { "in": "", "out": "x" },
+    { "in": "!!!", "out": "x" },
+    { "in": "a-very-long-collection-name-that-goes-on-and-on-forever", "out": "a-very-long-collection-name-that-goes-on" }
+  ],
+  "template": [
+    { "tpl": "atelier/{collection}/{name}-{ts}{ext}",
+      "tokens": { "collection": "maths", "name": "plate", "ts": "t1", "ext": ".png" },
+      "out": "atelier/maths/plate-t1.png" },
+    { "tpl": "{collection}/{idx}{ext}",
+      "tokens": { "collection": "c", "idx": "7", "ext": ".webp" },
+      "out": "c/7.webp" },
+    { "tpl": "{collection}/{idx}{ext}",
+      "tokens": { "collection": "c", "idx": "12", "ext": ".png" },
+      "out": "c/12.png",
+      "comment": "idx is UNPADDED — the on-chain contract is base + i + ext with bare ints" },
+    { "tpl": "keep/{unknown}/x",
+      "tokens": { "collection": "c" },
+      "out": "keep/{unknown}/x",
+      "comment": "unknown tokens stay verbatim so mistakes are visible" }
+  ],
+  "publicUrl": [
+    { "type": "sftp", "cfg": { "urlPrefix": "https://eurobuddha.com/" },
+      "path": "atelier/maths/1.png", "isDir": false,
+      "out": "https://eurobuddha.com/atelier/maths/1.png" },
+    { "type": "webdav", "cfg": { "urlPrefix": "https://example.com/u" },
+      "path": "a/b.png", "isDir": false,
+      "out": "https://example.com/u/a/b.png" },
+    { "type": "kubo", "cfg": { "gateway": "https://ipfs.eurobuddha.com" },
+      "path": "bafybeigdyrztest", "isDir": true,
+      "out": "https://ipfs.eurobuddha.com/ipfs/bafybeigdyrztest/" },
+    { "type": "kubo", "cfg": { "gateway": "https://ipfs.eurobuddha.com/" },
+      "path": "bafyfilecid", "isDir": false,
+      "out": "https://ipfs.eurobuddha.com/ipfs/bafyfilecid" },
+    { "type": "pinata", "cfg": {},
+      "path": "bafypinnedcid", "isDir": false,
+      "out": "https://gateway.pinata.cloud/ipfs/bafypinnedcid" },
+    { "type": "github", "cfg": { "owner": "eurobuddha", "repo": "nft-assets", "branch": "", "serve": "raw" },
+      "path": "atelier/x.png", "isDir": false,
+      "out": "https://raw.githubusercontent.com/eurobuddha/nft-assets/main/atelier/x.png" },
+    { "type": "github", "cfg": { "owner": "o", "repo": "r", "serve": "pages", "pagesPrefix": "https://o.github.io/r/" },
+      "path": "atelier/x.png", "isDir": false,
+      "out": "https://o.github.io/r/atelier/x.png" }
+  ],
+  "kuboAdd": [
+    { "ndjson": "{\"Name\":\"dir/1.png\",\"Hash\":\"bafyfile1\",\"Size\":\"100\"}\n{\"Name\":\"dir/2.png\",\"Hash\":\"bafyfile2\",\"Size\":\"100\"}\n{\"Name\":\"dir\",\"Hash\":\"bafydircid\",\"Size\":\"220\"}\n",
+      "dirName": "dir", "out": "bafydircid" },
+    { "ndjson": "{\"Name\":\"icon.webp\",\"Hash\":\"bafysolo\",\"Size\":\"90\"}\n",
+      "dirName": "", "out": "bafysolo" },
+    { "ndjson": "{\"Name\":\"dir/1.png\",\"Hash\":\"bafyfile1\"}\n",
+      "dirName": "dir", "out": "",
+      "comment": "directory entry missing -> empty, caller errors honestly" }
+  ]
+}
