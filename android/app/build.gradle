@@ -44,7 +44,7 @@ android {
             // signingConfigs.release as ONE deliberate fleet-wide migration.
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 
