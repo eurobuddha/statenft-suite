@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -13,7 +14,14 @@ import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 import android.widget.Toast;
+
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import java.io.OutputStream;
 
@@ -52,7 +60,35 @@ public class FiltrActivity extends Activity {
         });
         web.addJavascriptInterface(new Bridge(), "AndroidFiltr");
         web.loadUrl("file:///android_asset/filtr/filtr.html");
-        setContentView(web);
+
+        // Edge-to-edge (forced on Android 15 / SDK 35): without inset handling
+        // the WebView draws UNDER the status bar and the nav bar, so FILTR's top
+        // action bar and bottom category bar land off-screen and unreachable.
+        // A WebView silently ignores setPadding for its own content layout (unlike
+        // a plain ViewGroup — this is why padding the WebView directly did nothing),
+        // so wrap it in a FrameLayout and pad the FRAME by the system-bar +
+        // display-cutout insets (and the IME when open). The frame's paper
+        // background fills the inset strips; MainActivity uses the same pattern.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#F2F1EC")); // --paper
+        root.addView(web, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(root);
+
+        WindowInsetsControllerCompat wic =
+                new WindowInsetsControllerCompat(getWindow(), root);
+        wic.setAppearanceLightStatusBars(true);      // dark icons on the cream bar
+        wic.setAppearanceLightNavigationBars(true);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets sys = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars()
+                            | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            v.setPadding(sys.left, sys.top, sys.right, Math.max(sys.bottom, ime.bottom));
+            return insets;
+        });
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {

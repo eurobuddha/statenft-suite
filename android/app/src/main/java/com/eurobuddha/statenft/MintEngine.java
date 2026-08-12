@@ -230,26 +230,21 @@ public final class MintEngine {
                 if (LocalStore.pendingOk(ctx, c.optString("coinid"), tip)) ready.add(c);
             }
             if (ready.isEmpty()) { done.done("Splits confirming…"); return; }
-            /* Honest escalation: a ready coin here means a posted split's
-             * pending TTL expired. If the unit count hasn't moved after three
-             * such cycles, the txn is being rejected by consensus (too heavy
-             * for the 64KB TxPoW even at unit+change) — say so and stop
-             * hammering the chain. Progress resets the counter, so a slow
-             * confirmation self-heals. */
+            /* A stalled split is NOT proof of oversize. Every collection that
+             * minted passed the signed-record guard (jointGate: def within the
+             * split budget), so a minted token can ALWAYS split one edition at a
+             * time — 'Maths' at a ~18.4K signed def split fine while 'Gallery
+             * Bibeau' at ~9.2K stalled, disproving any size story. A stall here
+             * means the phone node hasn't MINED the (fittable) batch-1 split yet,
+             * not that it can't fit. So we NEVER conclude "too heavy, bury it"
+             * from unit-count alone (that falsely told users to destroy perfectly
+             * splittable collections, 2026-08-12). Keep retrying; the only real
+             * size verdict is the node's own "size too large" at k=1, surfaced
+             * raw by splitCoin's postTxn handler. Track the counter only so a
+             * slow split doesn't spam, capped so it can never trip a hard stop. */
             int lastUnits = row.optInt("splitunits", -1);
             int retries = row.optInt("splitretries", 0);
-            if (lastUnits >= 0 && units <= lastUnits) {
-                retries++;
-                if (retries >= 3) {
-                    put(row, "splitretries", retries);
-                    setError(ctx, row, "split cannot fit the chain's 64KB transaction cap — "
-                            + "this token's definition (icon + traits) is too heavy. "
-                            + "Bury this collection and re-mint with a lighter icon or fewer traits.", done);
-                    return;
-                }
-            } else {
-                retries = 0;
-            }
+            retries = (lastUnits >= 0 && units <= lastUnits) ? Math.min(retries + 1, 3) : 0;
             put(row, "splitretries", retries);
             put(row, "splitunits", units);
             LocalStore.upsert(ctx, row);
@@ -375,6 +370,16 @@ public final class MintEngine {
         }
         steps.add("txnstate id:" + id + " port:0 value:0");
         steps.add("txnsign id:" + id + " publickey:auto");
+        // The fat coin is unstamped (state[0]==0), so its StateNFT script only
+        // authorises a SPLIT via the creator-bypass branch: IF s EQ 0 AND
+        // SIGNEDBY(<creatorpk>). publickey:auto does NOT reliably produce that
+        // signature for a custom script (it worked for some collections by luck
+        // of key ordering, not for Gallery Bibeau) — the node accepts the post,
+        // consensus finds the bypass unsigned, the fallback forbids splitting
+        // (VERIFYOUT demands the whole @AMOUNT) and silently drops the txn. Sign
+        // explicitly with the creator key, exactly as phaseMove already does.
+        if (!row.optString("creatorpk").isEmpty())
+            steps.add("txnsign id:" + id + " publickey:" + row.optString("creatorpk"));
         int finalK = k;
         postTxn(node, id, steps, ok, e -> {
             if (e.contains("size too large") && finalK > 1) splitCoin(node, row, coin, finalK / 2, ok, fail);
@@ -583,6 +588,11 @@ public final class MintEngine {
         steps.add("txnstate id:" + id + " port:0 value:" + idx);
         if ("embed".equals(row.optString("mode"))) steps.add("txnstate id:" + id + " port:1 value:[" + img + "]");
         steps.add("txnsign id:" + id + " publickey:auto");
+        // The blank unit is still unstamped (state[0]==0) when spent, so stamping
+        // it also runs the creator-bypass branch and needs the creator signature
+        // (auto is unreliable for the custom script — see splitCoin). Mirror MOVE.
+        if (!row.optString("creatorpk").isEmpty())
+            steps.add("txnsign id:" + id + " publickey:" + row.optString("creatorpk"));
         postTxn(node, id, steps,
                 () -> stampNext(ctx, node, row, tip, plan, i + 1, done),
                 e -> setError(ctx, row, e, done));

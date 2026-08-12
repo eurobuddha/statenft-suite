@@ -255,6 +255,8 @@ function filtrLoadImage(img, name) {
   FILTR.sel = -1;
   FILTR.crop = null;
   filtrSetTool("");
+  var stg = $("filtr-stage");
+  if (stg) { stg.classList.remove("filtr-empty"); }  // hide the tap-to-import hint
   FILTR.engine.source.setImage(FILTR.src, name);
   filtrMeta();
   filtrPush();
@@ -583,7 +585,13 @@ function filtrEraseAt(p, last) {
 /* ---------- stage pointer wiring (pan / crop / erase / place / drag ann) ---------- */
 
 function filtrStageDown(ev) {
-  if (!FILTR.src) { return; }
+  if (!FILTR.src) {
+    // empty pad: the stage itself is the import target — tapping it opens the
+    // picker (matches the "Tap to import" hint shown over the empty stage).
+    var fi = $("filtr-file");
+    if (fi) { fi.click(); }
+    return;
+  }
   var p = filtrToImg(ev);
   if (FILTR.tool === "crop") {
     FILTR.crop = { x: p.x, y: p.y, w: 1, h: 1 };

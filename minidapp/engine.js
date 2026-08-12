@@ -575,6 +575,12 @@ function engineSplitCoin(row, coin, k, ok, fail) {
   }
   steps.push("txnstate id:" + id + " port:0 value:0");   // sentinel: still unstamped
   steps.push("txnsign id:" + id + " publickey:auto");
+  // The fat coin is unstamped (state[0]==0), so its script only authorises a
+  // split via the creator-bypass (IF s EQ 0 AND SIGNEDBY(<creatorpk>)).
+  // publickey:auto does NOT reliably sign a custom script's SIGNEDBY key, so the
+  // post is accepted but consensus drops it (the fallback forbids splitting).
+  // Sign explicitly with the creator key, as enginePhaseMove already does.
+  if (row.CREATORPK) { steps.push("txnsign id:" + id + " publickey:" + row.CREATORPK); }
   enginePostTxn(id, steps, ok, function (e) {
     if (("" + e).indexOf("size too large") !== -1 && k > 1) {
       engineSplitCoin(row, coin, Math.floor(k / 2), ok, fail);
@@ -594,10 +600,17 @@ function enginePhaseSplit(row, tip, done) {
     if (units >= row.SIZE && bigs.length === 0) {
       engineSetPhase(row, "STAMP", done); return;
     }
-    /* Honest escalation: three pending cycles with no new units means the
-     * chain is rejecting the split by consensus (definition too heavy for the
-     * 64KB TxPoW even at unit+change) — surface it and stop hammering.
-     * Progress resets the counter, so a slow confirmation self-heals. */
+    /* A stalled split is NOT proof of oversize. Every collection that minted
+     * passed the signed-record guard (def within the split budget), so a minted
+     * token can ALWAYS split one edition at a time — 'Maths' at a ~18.4K signed
+     * def split fine while 'Gallery Bibeau' at ~9.2K stalled, disproving any
+     * size story. A stall means the phone node hasn't MINED the (fittable)
+     * batch-1 split yet, not that it can't fit. So we NEVER conclude "too heavy,
+     * bury it" from unit-count alone (that falsely told users to destroy
+     * perfectly splittable collections, 2026-08-12). Keep retrying; the only
+     * real size verdict is the node's own "size too large" at batch 1, surfaced
+     * raw by engineSplitCoin. Track the counter only so a slow split doesn't
+     * spam, capped so it can never trip a hard stop. */
     var readyAny = false;
     for (var bi = 0; bi < bigs.length; bi++) {
       if (enginePendingOk(bigs[bi].coinid, tip)) { readyAny = true; break; }
@@ -605,17 +618,7 @@ function enginePhaseSplit(row, tip, done) {
     if (readyAny && bigs.length > 0) {
       var lastUnits = parseInt(row.SPLITUNITS === undefined ? -1 : row.SPLITUNITS, 10);
       var retries = parseInt(row.SPLITRETRIES || 0, 10);
-      if (lastUnits >= 0 && units <= lastUnits) {
-        retries++;
-        if (retries >= 3) {
-          MDS.sql("UPDATE collections SET splitretries=" + retries +
-                  " WHERE id=" + row.ID, function () {});
-          engineSetError(row, "split cannot fit the chain's 64KB transaction cap - " +
-            "this token's definition (icon + traits) is too heavy. Bury this " +
-            "collection and re-mint with a lighter icon or fewer traits.", done);
-          return;
-        }
-      } else { retries = 0; }
+      retries = (lastUnits >= 0 && units <= lastUnits) ? Math.min(retries + 1, 3) : 0;
       row.SPLITRETRIES = retries;
       row.SPLITUNITS = units;
       MDS.sql("UPDATE collections SET splitretries=" + retries +
@@ -885,6 +888,10 @@ function enginePhaseStampCoins(row, tip, resList, done) {
               steps.push("txnstate id:" + id + " port:1 value:[" + img + "]");
             }
             steps.push("txnsign id:" + id + " publickey:auto");
+            // Blank unit is still unstamped (state[0]==0) when spent, so stamping
+            // also runs the creator-bypass and needs the creator signature (auto
+            // is unreliable for the custom script — see engineSplitCoin).
+            if (row.CREATORPK) { steps.push("txnsign id:" + id + " publickey:" + row.CREATORPK); }
             engineMarkPending(job.coinid, tip);
             /* Reserve the index DURABLY before posting: the coinid lands on
              * the item row now, not when the chain confirms. A round that

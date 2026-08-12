@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atelier</title>
-<link rel="stylesheet" href="styles.css?v=441">
-<script type="text/javascript" src="mds.js?v=441"></script>
-<script type="text/javascript" src="sanitize.js?v=441"></script>
-<script type="text/javascript" src="engine.js?v=441"></script>
-<script type="text/javascript" src="art.js?v=441"></script>
-<script type="text/javascript" src="ort.wasm.min.js?v=441"></script>
-<script type="text/javascript" src="photo.js?v=441"></script>
-<script type="text/javascript" src="sendall.js?v=441"></script>
-<script type="text/javascript" src="hosting.js?v=441"></script>
+<link rel="stylesheet" href="styles.css?v=447">
+<script type="text/javascript" src="mds.js?v=447"></script>
+<script type="text/javascript" src="sanitize.js?v=447"></script>
+<script type="text/javascript" src="engine.js?v=447"></script>
+<script type="text/javascript" src="art.js?v=447"></script>
+<script type="text/javascript" src="ort.wasm.min.js?v=447"></script>
+<script type="text/javascript" src="photo.js?v=447"></script>
+<script type="text/javascript" src="sendall.js?v=447"></script>
+<script type="text/javascript" src="hosting.js?v=447"></script>
 </head>
 <body>
 <div class="beam"></div>
@@ -470,7 +470,12 @@
           <button class="filtr-tool" id="filtr-fit">Fit</button>
           <span class="filtr-note" id="filtr-zoominfo"></span>
         </div>
-        <div class="filtr-stage" id="filtr-stage">
+        <div class="filtr-stage filtr-empty" id="filtr-stage">
+          <div class="filtr-emptyhint">
+            <span class="fe-glyph">&#8681;</span>
+            <span class="fe-title">Tap to import an image</span>
+            <span class="fe-sub">or drop / paste one here</span>
+          </div>
           <div id="filtr-zoomwrap" class="filtr-zoomwrap">
             <canvas id="filtr-canvas"></canvas>
             <div id="filtr-overlay" class="filtr-overlay"></div>
@@ -665,7 +670,7 @@
 
 <footer class="colophon">
   <span>identities enforced by KISS&nbsp;VM token script</span>
-  <span id="app-version" class="mono">Atelier v4.4.1</span>
+  <span id="app-version" class="mono">Atelier v4.4.7</span>
 </footer>
 
 <!-- burial modal -->
@@ -814,10 +819,10 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="text/javascript" src="app.js?v=441"></script>
-<script type="text/javascript" src="art-studio.js?v=441"></script>
-<script type="text/javascript" src="filtr-engine.js?v=441"></script>
-<script type="text/javascript" src="filtr.js?v=441"></script>
-<script type="text/javascript" src="filtr-sheet.js?v=441"></script>
+<script type="text/javascript" src="app.js?v=447"></script>
+<script type="text/javascript" src="art-studio.js?v=447"></script>
+<script type="text/javascript" src="filtr-engine.js?v=447"></script>
+<script type="text/javascript" src="filtr.js?v=447"></script>
+<script type="text/javascript" src="filtr-sheet.js?v=447"></script>
 </body>
 </html>

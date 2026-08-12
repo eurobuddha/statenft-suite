@@ -751,6 +751,22 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
   background:
     repeating-conic-gradient(#E8E7E1 0 25%, #F7F6F1 0 50%) 0 0 / 18px 18px;
 }
+/* empty pad: the whole stage is the import target (filtrStageDown opens the
+   picker while no image is loaded). filtr.js drops .filtr-empty on first load. */
+.filtr-emptyhint { display: none; }
+.filtr-stage.filtr-empty { cursor: pointer; }
+/* while empty the WebGL canvas clears to black; hide it (and the overlay) so the
+   dark hint text reads on the light checkerboard, not black-on-black. */
+.filtr-stage.filtr-empty #filtr-canvas,
+.filtr-stage.filtr-empty .filtr-overlay { visibility: hidden; }
+.filtr-stage.filtr-empty .filtr-emptyhint {
+  display: flex; position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.4rem; text-align: center; padding: 1.2rem; color: var(--dim);
+}
+.filtr-emptyhint .fe-glyph { font-size: 2.4rem; line-height: 1; color: var(--ink); }
+.filtr-emptyhint .fe-title { font: 800 0.95rem var(--sans); letter-spacing: 0.02em; color: var(--ink); }
+.filtr-emptyhint .fe-sub { font: 500 0.72rem var(--sans); max-width: 24ch; }
 .filtr-zoomwrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .filtr-zoomwrap canvas { display: block; }
 .filtr-overlay { position: absolute; inset: 0; }
@@ -825,6 +841,11 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
      sheet slots; the desktop 3-column layout is untouched. */
   .filtr-layout {
     display: flex; flex-direction: column; gap: 0; margin: 0;
+    /* the desktop rule sets align-items:start; without resetting it here the
+       flex column never stretches its children across the width, so the stage
+       (whose canvas is absolutely positioned) collapses to the width of the
+       little status line — the "half-width pad" bug. Stretch fills the phone. */
+    align-items: stretch;
     height: calc(100dvh - 128px); min-height: 400px; position: relative; overflow: hidden;
   }
   .filtr-layout > .filtr-rail { display: none; }            /* emptied by JS */
@@ -861,18 +882,17 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
   .filtr-cat .cl { font: 700 0.5rem var(--sans); letter-spacing: 0.05em; text-transform: uppercase; }
   .filtr-cat.active { color: var(--ink); border-top-color: var(--verm); }
 
-  /* scrim + sliding sheet (absolute within .filtr-layout, above the catbar) */
-  .filtr-scrim { display: block; position: absolute; inset: 0;
-    background: rgba(0,0,0,0.22); opacity: 0; pointer-events: none;
-    transition: opacity 0.18s; z-index: 46; }
-  .filtr-scrim.on { opacity: 1; pointer-events: auto; }
-  .filtr-sheet { display: flex; flex-direction: column; position: absolute;
-    left: 0; right: 0; bottom: 0; z-index: 47; height: 48%;
-    background: var(--card); border-top: 2px solid var(--ink); border-radius: 14px 14px 0 0;
-    transform: translateY(112%); transition: transform 0.22s cubic-bezier(.2,.7,.3,1);
-    box-shadow: 0 -10px 30px rgba(0,0,0,0.25); }
-  .filtr-sheet.on { transform: translateY(0); }
-  .filtr-sheet.big { height: 86%; }
+  /* IN-FLOW controls pane: it does NOT overlay the image. It sits in the flex
+     column between the stage and the category bar, so opening it SHRINKS the
+     stage and the image re-fits above it — the image is never covered. Scrolls
+     internally; collapse by tapping the active category, the grip, or ×. */
+  .filtr-scrim { display: none; }              /* no overlay in the in-flow model */
+  .filtr-sheet { display: none; order: 15; flex: 0 0 auto; min-height: 0;
+    max-height: 44%; overflow: hidden;   /* header pinned; .filtr-sbody scrolls */
+    background: var(--card); border-top: 2px solid var(--ink);
+    box-shadow: 0 -6px 18px rgba(0,0,0,0.12); }
+  .filtr-sheet.on { display: flex; flex-direction: column; }
+  .filtr-sheet.big { max-height: 68%; }
   .filtr-grip { padding: 0.4rem 0 0.1rem; text-align: center; cursor: pointer; flex: none; }
   .filtr-grip i { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--soft); }
   .filtr-shead { display: flex; align-items: center; justify-content: space-between; padding: 0.1rem 0.9rem 0.4rem; flex: none; }

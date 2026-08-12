@@ -91,7 +91,12 @@ function downloadBlob(name, data, mime) {
           <button class="filtr-tool" id="filtr-fit">Fit</button>
           <span class="filtr-note" id="filtr-zoominfo"></span>
         </div>
-        <div class="filtr-stage" id="filtr-stage">
+        <div class="filtr-stage filtr-empty" id="filtr-stage">
+          <div class="filtr-emptyhint">
+            <span class="fe-glyph">&#8681;</span>
+            <span class="fe-title">Tap to import an image</span>
+            <span class="fe-sub">or drop / paste one here</span>
+          </div>
           <div id="filtr-zoomwrap" class="filtr-zoomwrap">
             <canvas id="filtr-canvas"></canvas>
             <div id="filtr-overlay" class="filtr-overlay"></div>

@@ -40,6 +40,13 @@ var FSHEET_SEEN_IMG = false;
 
 function fsheetEl(id) { return document.getElementById(id); }
 
+/* the in-flow sheet resizes the stage when it opens/closes/expands; re-fit the
+ * image so it always sits fully visible above the controls (auto-fit is on). */
+function fsheetRefit() {
+  if (typeof filtrFit !== "function") { return; }
+  setTimeout(function () { try { filtrFit(); } catch (e) {} }, 60);
+}
+
 function fsheetRecordHome(id) {
   var el = fsheetEl(id);
   if (el && !FSHEET_HOMES[id]) {
@@ -95,12 +102,12 @@ function fsheetOpen(cat) {
   }
   fsheetEl("filtr-sheet-title").textContent = FSHEET_TITLES[cat] || "";
   fsheetEl("filtr-sheet").classList.add("on");
-  fsheetEl("filtr-scrim").classList.add("on");
   var cats = document.querySelectorAll("#filtr-catbar .filtr-cat");
   for (var c = 0; c < cats.length; c++) {
     cats[c].classList.toggle("active", cats[c].getAttribute("data-cat") === cat);
   }
   FSHEET_ACTIVE = cat;
+  fsheetRefit();                 // stage shrank — re-fit the image above the pane
 }
 
 function fsheetClose() {
@@ -110,6 +117,7 @@ function fsheetClose() {
   var cats = document.querySelectorAll("#filtr-catbar .filtr-cat");
   for (var c = 0; c < cats.length; c++) cats[c].classList.remove("active");
   FSHEET_ACTIVE = null;
+  fsheetRefit();                 // stage grew back — re-fit the image to fill it
 }
 
 /** React to viewport width: set up or tear down the narrow layout, then re-fit
@@ -139,7 +147,7 @@ function fsheetSync() {
   var scrim = fsheetEl("filtr-scrim"); if (scrim) scrim.addEventListener("click", fsheetClose);
   var grip = fsheetEl("filtr-grip");
   var expand = fsheetEl("filtr-sheet-expand");
-  function toggleBig() { var s = fsheetEl("filtr-sheet"); if (s) s.classList.toggle("big"); }
+  function toggleBig() { var s = fsheetEl("filtr-sheet"); if (s) s.classList.toggle("big"); fsheetRefit(); }
   if (grip) grip.addEventListener("click", toggleBig);
   if (expand) expand.addEventListener("click", toggleBig);
 
