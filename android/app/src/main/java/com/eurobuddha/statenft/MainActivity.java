@@ -633,7 +633,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         cover.setImageBitmap(Identicon.forToken(m.tokenid, 600));
         String lead = collectionLeadImage(m);
         if (lead != null) ImageLoader.loadOver(this, lead, cover);
-        card.addView(cover, new LinearLayout.LayoutParams(-1, dp(140)));
+        card.addView(badgedImage(cover, m.tokenid, m.webvalidate, 26),
+                new LinearLayout.LayoutParams(-1, dp(140)));
         card.addView(Design.rule(this, 2));
 
         LinearLayout inner = vertical();
@@ -652,6 +653,32 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         inner.addView(Design.meter(this, collectionProgress(m)), new LinearLayout.LayoutParams(-1, dp(5)){{ topMargin = dp(8); }});
         card.addView(inner);
         return card;
+    }
+
+    /** Wrap a tile image so a web-validation plaque sits in its bottom-right
+     *  corner when the collection's proof doc validates the tokenid — the
+     *  over-image badge that distinguishes validated collections at a glance
+     *  (NFTwallet parity: BalancesView + Identicon.checkBadge + WebValidate). */
+    private FrameLayout badgedImage(ImageView img, String tokenid, String webvalidate, int badgeDp) {
+        FrameLayout f = new FrameLayout(this);
+        f.addView(img, new FrameLayout.LayoutParams(-1, -1));
+        final int bs = dp(badgeDp);
+        final Runnable paint = () -> {
+            if (f.getChildCount() > 1) f.removeViewAt(1);
+            if (Boolean.TRUE.equals(WebValidate.status(tokenid))) {
+                ImageView badge = new ImageView(this);
+                FrameLayout.LayoutParams blp =
+                        new FrameLayout.LayoutParams(bs, bs, Gravity.BOTTOM | Gravity.END);
+                blp.setMargins(0, 0, dp(7), dp(7));
+                badge.setLayoutParams(blp);
+                badge.setImageBitmap(Identicon.checkBadge(bs));
+                f.addView(badge);
+            }
+        };
+        paint.run();
+        if (tokenid != null && !tokenid.isEmpty() && webvalidate != null && !webvalidate.isEmpty())
+            WebValidate.ensure(this, tokenid, webvalidate, paint);
+        return f;
     }
 
     private TextView statusPill(StateNft.Meta m) {
@@ -686,7 +713,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         img.setImageBitmap(Identicon.forToken(tid, 400));
         String icon = IconResolver.resolve(meta.icon);
         if (icon != null) ImageLoader.loadOver(this, icon, img);
-        card.addView(img, new LinearLayout.LayoutParams(-1, dp(120)));
+        card.addView(badgedImage(img, meta.tokenid, meta.webvalidate, 24),
+                new LinearLayout.LayoutParams(-1, dp(120)));
         card.addView(Design.rule(this, 2));
         LinearLayout inner = vertical();
         inner.setPadding(dp(10), dp(8), dp(10), dp(10));
@@ -956,6 +984,26 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         int off = dp(3);
         heroLp.setMargins(0, 0, off, off);
         heroBox.addView(hero, heroLp);
+        /* web-validation plaque over the hero */
+        {
+            final int bs = dp(30);
+            final FrameLayout hb = heroBox;
+            final Runnable paint = () -> {
+                if (Boolean.TRUE.equals(WebValidate.status(m.tokenid)) && hb.findViewWithTag("vbadge") == null) {
+                    ImageView badge = new ImageView(this);
+                    badge.setTag("vbadge");
+                    FrameLayout.LayoutParams blp =
+                            new FrameLayout.LayoutParams(bs, bs, Gravity.BOTTOM | Gravity.END);
+                    blp.setMargins(0, 0, dp(11), dp(11));
+                    badge.setLayoutParams(blp);
+                    badge.setImageBitmap(Identicon.checkBadge(bs));
+                    hb.addView(badge);
+                }
+            };
+            paint.run();
+            if (!m.tokenid.isEmpty() && !m.webvalidate.isEmpty())
+                WebValidate.ensure(this, m.tokenid, m.webvalidate, paint);
+        }
         heroBox.setClickable(true);
         heroBox.setOnClickListener(v -> { if (!shown.isEmpty()) showViewer(m, shown, 0); });
         body.addView(heroBox, lpm(0, 4, 0, 12));

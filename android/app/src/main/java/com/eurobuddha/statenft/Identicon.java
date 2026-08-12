@@ -16,6 +16,26 @@ public final class Identicon {
 
     private Identicon() {}
 
+    /** Web-validation plaque — a blue disc with a white check, overlaid in a
+     *  corner of a validated collection's image (ported from NFTwallet's
+     *  Identicon.checkBadge so both clients show the same verified mark). */
+    public static Bitmap checkBadge(int px) {
+        Bitmap bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        float r = px / 2f;
+        p.setColor(0xFFFFFFFF); c.drawCircle(r, r, r, p);                             // white outline ring
+        p.setColor(0xFF2F80ED); c.drawCircle(r, r, r - Math.max(1, px * 0.09f), p);   // blue disc
+        p.setColor(0xFFFFFFFF); p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(px * 0.13f); p.setStrokeCap(Paint.Cap.ROUND); p.setStrokeJoin(Paint.Join.ROUND);
+        Path path = new Path();
+        path.moveTo(px * 0.28f, px * 0.52f);
+        path.lineTo(px * 0.43f, px * 0.67f);
+        path.lineTo(px * 0.73f, px * 0.35f);
+        c.drawPath(path, p);
+        return bmp;
+    }
+
     public static Bitmap forToken(String tokenid, int px) {
         String key = px + "|" + (tokenid == null ? "" : tokenid);
         Bitmap cached = CACHE.get(key);

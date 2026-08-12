@@ -10,8 +10,8 @@ android {
         applicationId "com.eurobuddha.statenft"
         minSdk 28
         targetSdk 35
-        versionCode 709
-        versionName "0.7.9"
+        versionCode 713
+        versionName "0.7.13"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

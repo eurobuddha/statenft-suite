@@ -870,17 +870,22 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
     border-left: none; border-right: none; box-shadow: none; }
   #filtr-status { flex: none; order: 10; margin: 0; padding: 0.15rem 0.4rem; }
 
-  /* category bar — ALWAYS visible, never covered by the sheet */
-  .filtr-catbar { display: flex; order: 20; flex: none; overflow-x: auto;
+  /* category bar — ALWAYS visible, never covered by the sheet. All 8 categories
+     (incl. Save/export) must fit ON SCREEN: they flex to share the full width
+     equally rather than overflowing off the right edge, where Save became
+     unreachable and the horizontal scroll went undiscovered (2026-08-12). */
+  .filtr-catbar { display: flex; order: 20; flex: none; overflow-x: hidden;
     background: var(--paper); border-top: 2px solid var(--ink); z-index: 45; }
-  .filtr-catbar::-webkit-scrollbar { display: none; }
-  .filtr-cat { flex: 0 0 auto; min-width: 58px; padding: 0.42rem 0.2rem 0.5rem;
+  .filtr-cat { flex: 1 1 0; min-width: 0; padding: 0.42rem 0.05rem 0.5rem;
     display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
     background: none; border: none; color: var(--dim); cursor: pointer;
-    border-top: 3px solid transparent; font-family: var(--sans); }
-  .filtr-cat .ci { font-size: 1.08rem; line-height: 1; }
-  .filtr-cat .cl { font: 700 0.5rem var(--sans); letter-spacing: 0.05em; text-transform: uppercase; }
+    border-top: 3px solid transparent; font-family: var(--sans); overflow: hidden; }
+  .filtr-cat .ci { font-size: 1.02rem; line-height: 1; }
+  .filtr-cat .cl { font: 700 0.44rem var(--sans); letter-spacing: 0.01em;
+    text-transform: uppercase; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .filtr-cat.active { color: var(--ink); border-top-color: var(--verm); }
+  /* Save is the primary output — tint it so the export path reads at a glance */
+  .filtr-cat[data-cat="save"] { color: var(--verm); }
 
   /* IN-FLOW controls pane: it does NOT overlay the image. It sits in the flex
      column between the stage and the category bar, so opening it SHRINKS the

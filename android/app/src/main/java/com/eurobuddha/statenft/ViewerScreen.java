@@ -86,7 +86,7 @@ public final class ViewerScreen {
         sheetScroll.addView(sheet, new FrameLayout.LayoutParams(-1, -2));
         FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         sheetScroll.setLayoutParams(sheetLp);
-        sheetScroll.setVisibility(View.GONE);
+        sheetScroll.setVisibility(View.VISIBLE);   // provenance visible on entry — no hidden toggle
         root.addView(sheetScroll);
 
         info.setOnClickListener(v ->
@@ -127,7 +127,35 @@ public final class ViewerScreen {
         sheet.addView(Design.lot(c, String.format(java.util.Locale.US, "Lot %03d · %s", it.index,
                 it.owned ? "in your custody" : (it.coin != null ? "on-chain" : "unseen"))));
         TextView name = Design.display(c, meta.name, 17);
-        sheet.addView(name, lp(c, 0, 4, 0, 8));
+        sheet.addView(name, lp(c, 0, 4, 0, 6));
+
+        /* web-validation shield — asks the node (tokenvalidate) whether the
+         *  collection's proof doc names this tokenid; gold "verified" badge when
+         *  it does, tap opens the proof. Only a collection that set a validation
+         *  URL shows anything here. */
+        if (!meta.webvalidate.isEmpty()) {
+            final LinearLayout shieldSlot = new LinearLayout(c);
+            shieldSlot.setOrientation(LinearLayout.HORIZONTAL);
+            shieldSlot.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            /* client-side check (NFTwallet's WebValidate): does the proof doc name
+             *  this tokenid? gold verified badge when it does, muted otherwise. */
+            final Runnable paintShield = () -> {
+                Boolean v = WebValidate.status(meta.tokenid);
+                boolean valid = Boolean.TRUE.equals(v);
+                meta.webValid = valid;
+                shieldSlot.removeAllViews();
+                shieldSlot.addView(shieldBadge(act, valid, meta.webvalidate,
+                        valid ? null : (v == null ? "checking…" : "not yet validated")));
+            };
+            paintShield.run();
+            sheet.addView(shieldSlot, lp(c, 0, 0, 0, 8));
+            WebValidate.ensure(act, meta.tokenid, meta.webvalidate, paintShield);
+        }
+
+        if (!meta.description.isEmpty()) {
+            TextView desc = Design.body(c, meta.description);
+            sheet.addView(desc, lp(c, 0, 0, 0, 8));
+        }
 
         LinearLayout hashes = new LinearLayout(c);
         hashes.setOrientation(LinearLayout.HORIZONTAL);
@@ -182,14 +210,34 @@ public final class ViewerScreen {
             }
         }
 
+        /* ── links & metadata: every field the StateNFT carries, the URLs
+         *    tappable (open in browser), hashes tap-to-copy ── */
+        sheet.addView(space(c, 4));
+        sheet.addView(sectionLabel(c, "Links"));
+        boolean anyLink = false;
+        if (!meta.externalUrl.isEmpty())  { sheet.addView(linkRow(act, "External", meta.externalUrl)); anyLink = true; }
+        if (!meta.webvalidate.isEmpty())  { sheet.addView(linkRow(act, "Web validate", meta.webvalidate)); anyLink = true; }
+        if ("url".equals(meta.mode) && !meta.base.isEmpty())
+                                          { sheet.addView(linkRow(act, "Image base", meta.base)); anyLink = true; }
+        if (meta.icon.startsWith("http")) { sheet.addView(linkRow(act, "Icon", meta.icon)); anyLink = true; }
+        if (!anyLink) sheet.addView(kv(c, "Links", "none set"));
+
+        sheet.addView(space(c, 4));
+        sheet.addView(sectionLabel(c, "Details"));
+        sheet.addView(kv(c, "Mode", "url".equals(meta.mode) ? "URL-hosted" : "Embedded"));
+        if (meta.size > 0) sheet.addView(kv(c, "Editions", String.valueOf(meta.size)));
+        if ("url".equals(meta.mode) && !meta.ext.isEmpty()) sheet.addView(kv(c, "File type", meta.ext));
         if (it.coin != null) {
             sheet.addView(kv(c, "State port 0", StateNft.state(it.coin, 0)));
             String s1 = StateNft.state(it.coin, 1);
             sheet.addView(kv(c, "State port 1", s1 == null ? "—" : "embedded image (" + s1.length() + " ch)"));
-            sheet.addView(kv(c, "Address", Util.shorten(it.coin.optString("address"))));
+            sheet.addView(copyKv(act, "Address", it.coin.optString("address")));
         }
-        if (!meta.creatorPk.isEmpty()) sheet.addView(kv(c, "Creator key", Util.shorten(meta.creatorPk)));
-        sheet.addView(kv(c, "Contract", meta.webvalidate.isEmpty() ? "Locked edition" : "Locked + web validate"));
+        if (!meta.creatorPk.isEmpty()) sheet.addView(copyKv(act, "Creator key", meta.creatorPk));
+        if (!meta.creatorAddr.isEmpty()) sheet.addView(copyKv(act, "Creator address", meta.creatorAddr));
+        sheet.addView(copyKv(act, "Token id", meta.tokenid));
+        sheet.addView(kv(c, "Contract", meta.webvalidate.isEmpty()
+                ? "Locked edition" : (meta.webValid ? "Locked · web-verified" : "Locked + web validate")));
 
         LinearLayout actions = new LinearLayout(c);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -229,6 +277,77 @@ public final class ViewerScreen {
         val.setGravity(Gravity.END);
         row.addView(val, new LinearLayout.LayoutParams(0, -2, 1.4f));
         return row;
+    }
+
+    /** Small uppercase section header inside the provenance sheet. */
+    private static TextView sectionLabel(Context c, String s) {
+        TextView t = Design.text(c, s.toUpperCase(), 9f, Design.DIM(), Design.sansBold());
+        t.setLetterSpacing(0.16f);
+        t.setPadding(0, Design.dp(c, 6), 0, Design.dp(c, 2));
+        return t;
+    }
+
+    /** Open a URL in the browser; assume https:// when no scheme is present. */
+    private static void openUrl(Activity act, String url) {
+        try {
+            String u = url.trim();
+            if (!u.matches("(?i)^[a-z][a-z0-9+.-]*://.*")) u = "https://" + u;
+            act.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)));
+        } catch (Exception e) {
+            Toast.makeText(act, "Couldn't open link", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** kv row whose value is a tappable link (vermilion, underlined) — tap opens
+     *  it in the browser, long-press copies the URL. */
+    private static LinearLayout linkRow(Activity act, String k, String url) {
+        Context c = act;
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, Design.dp(c, 5), 0, Design.dp(c, 5));
+        TextView key = Design.text(c, k.toUpperCase(), 9.5f, Design.DIM(), Design.sansBold());
+        key.setLetterSpacing(0.14f);
+        row.addView(key, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView val = Design.text(c, url, 11f, Design.ACCENT(), Design.mono());
+        val.setGravity(Gravity.END);
+        val.setPaintFlags(val.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        val.setMaxLines(3);
+        val.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        val.setClickable(true);
+        val.setOnClickListener(v -> openUrl(act, url));
+        val.setOnLongClickListener(v -> {
+            ClipboardManager cm = (ClipboardManager) act.getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("statenft", url));
+            Toast.makeText(act, "Copied", Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        row.addView(val, new LinearLayout.LayoutParams(0, -2, 1.8f));
+        return row;
+    }
+
+    /** kv row that shows a shortened hash and copies the full value on tap. */
+    private static LinearLayout copyKv(Activity act, String k, String full) {
+        LinearLayout row = kv(act, k, Util.shorten(full));
+        copyOnTap(act, (TextView) row.getChildAt(1), full);
+        return row;
+    }
+
+    /** Web-validation badge: gold "verified" chip (tap opens the proof) or a
+     *  muted pending/unvalidated state. */
+    private static TextView shieldBadge(Activity act, boolean valid, String url, String pendingText) {
+        Context c = act;
+        int gold = 0xFF9A7B1F;
+        String label = valid ? "✓ WEB-VERIFIED"
+                : "○ WEB-VALIDATE" + (pendingText == null ? "" : " · " + pendingText);
+        TextView t = Design.text(c, label, 9.5f, valid ? gold : Design.DIM(), Design.sansBold());
+        t.setLetterSpacing(0.1f);
+        t.setPadding(Design.dp(c, 8), Design.dp(c, 5), Design.dp(c, 8), Design.dp(c, 6));
+        t.setBackground(Design.ruled(c, Design.CARD(), valid ? gold : Design.SOFT(), valid ? 2 : 1));
+        if (valid && url != null && !url.isEmpty()) {
+            t.setClickable(true);
+            t.setOnClickListener(v -> openUrl(act, url));
+        }
+        return t;
     }
 
     private static Bitmap bitmapFor(Activity act, StateNft.Meta meta, StateNft.Item it) {
