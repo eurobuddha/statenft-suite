@@ -123,10 +123,14 @@ console.log("enginePhaseCreatePost — itemtraits sealed into token metadata");
  * their ~11KB definitions (icon + 20 items' traits) built ~55KB txns the
  * chain rejected without an error. */
 console.log("engineSplitBatch — outputs sized to the token definition");
-check("legacy ~7KB definition keeps the proven 3-unit batch", sandbox.engineSplitBatch(7000), 3);
+// conservative sizing (28000): every coin embeds the full def + a ~9KB spend
+// signature, so a ~9KB signed def must split ONE unit at a time to stay
+// mineable (Gallery Bibeau silently-rejected at batch 2, 2026-08-12).
+check("legacy ~7KB definition splits 2 at a time", sandbox.engineSplitBatch(7000), 2);
+check("signed ~9.2KB def (Bibeau) drops to 1 unit + change", sandbox.engineSplitBatch(9208), 1);
 check("generative ~11KB definition drops to 1 unit + change", sandbox.engineSplitBatch(11079), 1);
 check("tiny definition capped at 3", sandbox.engineSplitBatch(500), 3);
-check("~10KB definition fits 2", sandbox.engineSplitBatch(10000), 2);
+check("~10KB definition drops to 1", sandbox.engineSplitBatch(10000), 1);
 check("degenerate definition still yields 1", sandbox.engineSplitBatch(90000), 1);
 
 /* ---- misc --------------------------------------------------------------- */

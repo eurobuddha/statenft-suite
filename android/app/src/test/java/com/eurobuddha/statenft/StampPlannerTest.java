@@ -34,10 +34,14 @@ public class StampPlannerTest {
     }
 
     @Test public void splitBatchSizesToTokenDefinition() {
-        assertEquals(3, MintEngine.splitBatch(7000));    // legacy: proven batch
+        // conservative (28000): every coin embeds the full def + a ~9KB spend
+        // signature, so a ~9KB signed def must split ONE at a time to stay
+        // mineable (Gallery Bibeau silently-rejected at batch 2, 2026-08-12).
+        assertEquals(2, MintEngine.splitBatch(7000));    // legacy
+        assertEquals(1, MintEngine.splitBatch(9208));    // signed ~9.2KB def (Bibeau)
         assertEquals(1, MintEngine.splitBatch(11079));   // generative: unit + change
         assertEquals(3, MintEngine.splitBatch(500));     // tiny: capped
-        assertEquals(2, MintEngine.splitBatch(10000));
+        assertEquals(1, MintEngine.splitBatch(10000));
         assertEquals(1, MintEngine.splitBatch(90000));   // degenerate: floor 1
     }
 

@@ -645,7 +645,13 @@ function enginePhaseSplit(row, tip, done) {
  *  the 64KB TxPoW cap. Legacy ~7KB definitions keep the proven 3-unit batch;
  *  ~11KB generative definitions drop to 1. */
 function engineSplitBatch(defLen) {
-  var defs = Math.max(1, Math.floor(40000 / Math.max(1, defLen)));
+  /* Every coin (input + each output) embeds the FULL token definition, and the
+   * spend adds a ~9KB WOTS signature the def-count model ignored. A signed def
+   * of ~9KB at batch 2 (4 def copies + sig) lands just over the mineable TxPoW
+   * size: the node accepts it to the mempool but the chain silently drops it,
+   * so the split loops forever (Gallery Bibeau, 2026-08-12). 28000 (was 40000)
+   * leaves headroom so a heavy signed def splits one unit at a time. */
+  var defs = Math.max(1, Math.floor(28000 / Math.max(1, defLen)));
   return Math.max(1, Math.min(3, defs - 2));
 }
 
@@ -701,6 +707,11 @@ var ENGINE_STALL_TICKS = 8;
 var ENGINE_STALL = {};   // collectionid -> {sig, ticks}
 
 function engineWatchStall(row, tip, done) {
+  // SPLIT owns its own escalation (enginePhaseSplit: 3 no-progress cycles ->
+  // honest error). The watchdog's recover RESETS splitretries, so it used to
+  // mask a genuinely-unmineable split as an eternal loop (Gallery Bibeau).
+  // Leave SPLIT alone so its escalation can fire.
+  if (row.PHASE === "SPLIT") { return false; }
   var sig = row.PHASE + "|" + (row.MINTED || 0);
   var st = ENGINE_STALL[row.ID];
   if (!st || st.sig !== sig) {
