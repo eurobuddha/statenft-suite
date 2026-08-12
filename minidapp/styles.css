@@ -814,41 +814,92 @@ main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
 .filtr-postrow input { accent-color: var(--verm); }
 .filtr-postsub { padding-left: 0.4rem; border-left: 2px solid var(--soft); margin-bottom: 0.4rem; }
 .filtr-savebtn { width: 100%; margin-bottom: 0.4rem; text-align: center; }
-/* Tab strip lives in the markup always; only the narrow layout shows it. */
-.filtr-tabs { display: none; }
-.filtr-tab {
-  border: 1.5px solid var(--ink); background: var(--card); cursor: pointer;
-  font: 800 0.62rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 0.5rem 0.7rem; white-space: nowrap; flex: 0 0 auto;
-}
-.filtr-tab.on { background: var(--ink); color: #fff; }
+/* Bottom-sheet scaffold: present in the markup always, shown ONLY on narrow.
+   On desktop these are hidden and the 3-column layout above renders unchanged. */
+.filtr-topbar, .filtr-catbar, .filtr-sheet, .filtr-scrim { display: none; }
 
 @media (max-width: 900px) {
-  /* Narrow: the image stage stays pinned on top while ONE pane at a time
-     shows beneath it, flicked via the sticky bottom tab bar. The desktop
-     three-column layout above is untouched. */
-  .filtr-layout { display: flex; flex-direction: column; gap: 0.7rem; }
-  .filtr-center {
-    order: 0; position: sticky; top: 0; z-index: 40;
-    background: var(--paper); padding-bottom: 0.3rem;
+  /* Snapseed-style phone editor: the image is the hero, a fixed category bar
+     sits at the very bottom, and tapping a category slides a sheet UP above it
+     (never covering it). filtr-sheet.js relocates the real controls into the
+     sheet slots; the desktop 3-column layout is untouched. */
+  .filtr-layout {
+    display: flex; flex-direction: column; gap: 0; margin: 0;
+    height: calc(100dvh - 128px); min-height: 400px; position: relative; overflow: hidden;
   }
-  .filtr-stage { height: 38vh; }
-  .filtr-center .filtr-toolbar { flex-wrap: nowrap; overflow-x: auto; }
-  .filtr-rail { order: 1; }
-  .filtr-tabs {
-    order: 2; display: flex; gap: 0.3rem;
-    position: sticky; bottom: 0; z-index: 40;
-    background: var(--paper); border-top: 2px solid var(--ink);
-    padding: 0.5rem 0.1rem 0.6rem; overflow-x: auto;
+  .filtr-layout > .filtr-rail { display: none; }            /* emptied by JS */
+
+  .filtr-topbar {
+    display: flex; order: 0; align-items: center; gap: 0.3rem;
+    flex: none; flex-wrap: nowrap; overflow-x: auto;
+    background: var(--paper); border-bottom: 2px solid var(--ink); padding: 0.42rem 0.42rem;
   }
-  /* exactly one pane visible — the one the tab bar marked .ftab-on */
-  .filtr-rail > .filtr-panel, .filtr-rail > .filtr-acc { display: none; }
-  .filtr-rail > .ftab-on { display: block; }
-  /* an active accordion renders as a plain panel: tab is its header */
-  .filtr-acc.ftab-on h4 { display: none; }
-  .filtr-acc.ftab-on .filtr-accbody { display: block; padding: 0; }
-  .filtr-acc.ftab-on {
-    border: 2px solid var(--ink); box-shadow: var(--shadow-sm);
-    background: var(--card); padding: 0.8rem; margin: 0;
-  }
+  .filtr-topbar::-webkit-scrollbar { display: none; }
+  .filtr-topbar .filtr-tool, .filtr-topbar .btn { flex: 0 0 auto; margin: 0;
+    font-size: 0.6rem; padding: 0.44rem 0.55rem; }
+  .filtr-topbar #filtr-apply { margin-left: auto; }
+
+  .filtr-center { order: 1; display: flex; flex-direction: column; flex: 1;
+    min-height: 0; margin: 0; }
+  .filtr-center > .filtr-toolbar { display: none; }         /* emptied by JS */
+  .filtr-center > .filtr-toolbar#filtr-toolopts { display: flex; flex: none; order: 9;
+    flex-wrap: wrap; background: var(--paper); padding: 0.3rem 0.4rem 0; margin: 0; gap: 0.3rem; }
+  #filtr-toolopts:empty { display: none; }
+  .filtr-stage { flex: 1; min-height: 0; height: auto;
+    border-left: none; border-right: none; box-shadow: none; }
+  #filtr-status { flex: none; order: 10; margin: 0; padding: 0.15rem 0.4rem; }
+
+  /* category bar — ALWAYS visible, never covered by the sheet */
+  .filtr-catbar { display: flex; order: 20; flex: none; overflow-x: auto;
+    background: var(--paper); border-top: 2px solid var(--ink); z-index: 45; }
+  .filtr-catbar::-webkit-scrollbar { display: none; }
+  .filtr-cat { flex: 0 0 auto; min-width: 58px; padding: 0.42rem 0.2rem 0.5rem;
+    display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+    background: none; border: none; color: var(--dim); cursor: pointer;
+    border-top: 3px solid transparent; font-family: var(--sans); }
+  .filtr-cat .ci { font-size: 1.08rem; line-height: 1; }
+  .filtr-cat .cl { font: 700 0.5rem var(--sans); letter-spacing: 0.05em; text-transform: uppercase; }
+  .filtr-cat.active { color: var(--ink); border-top-color: var(--verm); }
+
+  /* scrim + sliding sheet (absolute within .filtr-layout, above the catbar) */
+  .filtr-scrim { display: block; position: absolute; inset: 0;
+    background: rgba(0,0,0,0.22); opacity: 0; pointer-events: none;
+    transition: opacity 0.18s; z-index: 46; }
+  .filtr-scrim.on { opacity: 1; pointer-events: auto; }
+  .filtr-sheet { display: flex; flex-direction: column; position: absolute;
+    left: 0; right: 0; bottom: 0; z-index: 47; height: 48%;
+    background: var(--card); border-top: 2px solid var(--ink); border-radius: 14px 14px 0 0;
+    transform: translateY(112%); transition: transform 0.22s cubic-bezier(.2,.7,.3,1);
+    box-shadow: 0 -10px 30px rgba(0,0,0,0.25); }
+  .filtr-sheet.on { transform: translateY(0); }
+  .filtr-sheet.big { height: 86%; }
+  .filtr-grip { padding: 0.4rem 0 0.1rem; text-align: center; cursor: pointer; flex: none; }
+  .filtr-grip i { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--soft); }
+  .filtr-shead { display: flex; align-items: center; justify-content: space-between; padding: 0.1rem 0.9rem 0.4rem; flex: none; }
+  .filtr-shead h3 { margin: 0; font: 800 0.78rem var(--sans); letter-spacing: 0.14em; text-transform: uppercase; }
+  .filtr-shead-tools button { border: none; background: none; color: var(--dim); font-size: 1.15rem; cursor: pointer; padding: 0.1rem 0.35rem; }
+  .filtr-sbody { flex: 1; overflow-y: auto; padding: 0.2rem 0.9rem 1rem; }
+
+  .filtr-slot { display: none; }
+  .filtr-slot.on { display: block; }
+  /* tool grids (transform / annotate): buttons wrap 3-across, control body full-width */
+  .filtr-slot[data-cat=transform].on, .filtr-slot[data-cat=annotate].on {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; align-content: start; }
+  .filtr-slot .filtr-tool { flex: 1 1 27%; width: auto; margin: 0; padding: 0.8rem 0.3rem; font-size: 0.62rem; }
+  .filtr-slot #filtr-annotate-controls, .filtr-slot #filtr-adjust-controls,
+  .filtr-slot #filtr-post-controls, .filtr-slot #filtr-fx-controls { flex: 1 1 100%; padding: 0; }
+  .filtr-slot #filtr-fx-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; margin-bottom: 0.6rem; }
+  .filtr-slot .filtr-fx { padding: 0.55rem 0.4rem; font-size: 0.62rem; text-align: center;
+    border: 1.5px solid var(--ink); background: var(--card); }
+  .filtr-slot .filtr-fx.on { border-left: 1.5px solid var(--verm); background: var(--verm); color: #fff; }
+  .filtr-slot #filtr-presets { grid-template-columns: repeat(3, 1fr); }
+  .filtr-slot .filtr-savebtn { padding: 0.8rem 0.8rem; }
+  .filtr-drop { aspect-ratio: 16 / 9; }
+  /* big touch sliders in the sheet */
+  .filtr-sbody .filtr-crow { flex-wrap: wrap; gap: 0.2rem 0.5rem; margin-bottom: 0.9rem; }
+  .filtr-sbody .filtr-crow label { flex: 1 0 100%; width: auto; margin-bottom: 0.15rem; font-size: 0.6rem; }
+  .filtr-sbody .filtr-crow input[type=range] { flex: 1 1 74%; height: 32px; }
+  .filtr-sbody .filtr-crow input[type=text], .filtr-sbody .filtr-crow select { flex: 1 1 60%; padding: 0.5rem 0.4rem; font-size: 0.78rem; }
+  .filtr-sbody .filtr-val { flex: 0 0 auto; font-size: 0.72rem; }
+  .filtr-sbody .filtr-postrow { padding: 0.4rem 0; }
 }

@@ -97,14 +97,14 @@ sandbox.self = sandbox;
 
 let threw = null;
 try {
-  for (const f of ["filtr-engine.js", "filtr.js", "filtr-tabs.js"]) {
+  for (const f of ["filtr-engine.js", "filtr.js", "filtr-sheet.js"]) {
     const src = fs.readFileSync(path.join(MINIDAPP, f), "utf8");
     vm.runInNewContext(src, sandbox, { filename: f });
   }
 } catch (e) { threw = e; }
 
 console.log("filtr — parse and top-level binding");
-check("filtr-engine.js + filtr.js + filtr-tabs.js load in the stub DOM", threw === null,
+check("filtr-engine.js + filtr.js + filtr-sheet.js load in the stub DOM", threw === null,
       threw && threw.stack && threw.stack.split("\n").slice(0, 2).join(" | "));
 
 /* ---- 2. pure engine surface -------------------------------------------- */

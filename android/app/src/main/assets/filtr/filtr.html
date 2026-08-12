@@ -13,6 +13,7 @@
   body { padding: 0.7rem; }
   /* narrow layout (<=900px) takes its 38vh stage from styles.css */
   @media (min-width: 901px) { .filtr-stage { height: 46vh; } }
+  @media (max-width: 900px) { #filtr-layout { height: calc(100dvh - 22px); } }
 </style>
 </head>
 <body>
@@ -46,11 +47,12 @@ function downloadBlob(name, data, mime) {
   r.readAsDataURL(blob);
 }
 </script>
-<section id="view-filtr" >
+  <section id="view-filtr">
     <div id="filtr-unsupported" class="empty-state hidden">
       <p class="empty-glyph">&#9670;</p>
-      <p>FILTR needs WebGL2, which this device's webview doesn't provide.
-         Open Atelier on a desktop browser or a newer device.</p>
+      <p><b>FILTR is installed and ready</b> &mdash; but this viewer doesn&rsquo;t provide
+         WebGL2, which the editor needs. Nothing has been removed; open Atelier in a
+         desktop browser or a newer device/webview and the full editor appears here.</p>
     </div>
     <div id="filtr-layout" class="filtr-layout">
       <div class="filtr-rail">
@@ -134,23 +136,49 @@ function downloadBlob(name, data, mime) {
           </div>
         </div>
       </div>
-      <!-- narrow-viewport tab strip: CSS shows it only <=900px; on desktop the
-           three-column layout above renders exactly as before -->
-      <div id="filtr-tabs" class="filtr-tabs">
-        <button id="filtr-tab-import" class="filtr-tab on" data-pane="filtr-panel-import">Import</button>
-        <button id="filtr-tab-presets" class="filtr-tab" data-pane="filtr-panel-presets">Presets</button>
-        <button id="filtr-tab-effects" class="filtr-tab" data-pane="filtr-panel-effects">Effects</button>
-        <button id="filtr-tab-tune" class="filtr-tab" data-pane="filtr-acc-effect">Tune</button>
-        <button id="filtr-tab-adjust" class="filtr-tab" data-pane="filtr-acc-adjust">Adjust</button>
-        <button id="filtr-tab-post" class="filtr-tab" data-pane="filtr-acc-post">Post FX</button>
-        <button id="filtr-tab-annotate" class="filtr-tab" data-pane="filtr-acc-annotate">Annotate</button>
-        <button id="filtr-tab-save" class="filtr-tab" data-pane="filtr-acc-save">Save</button>
+      <!-- ===== narrow-viewport bottom-sheet scaffold =====
+           Hidden on desktop (the 3-column layout above renders unchanged).
+           On <=900px, filtr-sheet.js MOVES the real controls above into these
+           slots (moving DOM nodes preserves every id + filtr.js binding), then
+           restores them if the viewport widens back. -->
+      <div class="filtr-topbar" id="filtr-topbar"></div>
+      <div class="filtr-scrim" id="filtr-scrim"></div>
+      <div class="filtr-sheet" id="filtr-sheet">
+        <div class="filtr-grip" id="filtr-grip"><i></i></div>
+        <div class="filtr-shead">
+          <h3 id="filtr-sheet-title">Adjust</h3>
+          <div class="filtr-shead-tools">
+            <button id="filtr-sheet-expand" title="expand">&#10530;</button>
+            <button id="filtr-sheet-close" title="close">&times;</button>
+          </div>
+        </div>
+        <div class="filtr-sbody" id="filtr-sbody">
+          <div class="filtr-slot" data-cat="import"></div>
+          <div class="filtr-slot" data-cat="transform"></div>
+          <div class="filtr-slot" data-cat="effects"></div>
+          <div class="filtr-slot" data-cat="presets"></div>
+          <div class="filtr-slot" data-cat="adjust"></div>
+          <div class="filtr-slot" data-cat="post"></div>
+          <div class="filtr-slot" data-cat="annotate"></div>
+          <div class="filtr-slot" data-cat="save"></div>
+        </div>
+      </div>
+      <div class="filtr-catbar" id="filtr-catbar">
+        <button class="filtr-cat" data-cat="import"><span class="ci">&#8681;</span><span class="cl">Import</span></button>
+        <button class="filtr-cat" data-cat="transform"><span class="ci">&#9634;</span><span class="cl">Transform</span></button>
+        <button class="filtr-cat" data-cat="effects"><span class="ci">&#10022;</span><span class="cl">Effects</span></button>
+        <button class="filtr-cat" data-cat="presets"><span class="ci">&#9638;</span><span class="cl">Presets</span></button>
+        <button class="filtr-cat" data-cat="adjust"><span class="ci">&#9788;</span><span class="cl">Adjust</span></button>
+        <button class="filtr-cat" data-cat="post"><span class="ci">&#9673;</span><span class="cl">Post FX</span></button>
+        <button class="filtr-cat" data-cat="annotate"><span class="ci">&#9998;</span><span class="cl">Annotate</span></button>
+        <button class="filtr-cat" data-cat="save"><span class="ci">&#9635;</span><span class="cl">Save</span></button>
       </div>
     </div>
   </section>
+
 <script src="filtr-engine.js"></script>
 <script src="filtr.js"></script>
-<script src="filtr-tabs.js"></script>
+<script src="filtr-sheet.js"></script>
 <script>filtrEnter();</script>
 </body>
 </html>

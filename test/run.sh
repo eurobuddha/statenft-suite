@@ -74,7 +74,7 @@ for f in art.js photo.js; do
   fi
 done
 FBRIDGE=android/app/src/main/assets/filtr
-for f in filtr-engine.js filtr.js filtr-tabs.js styles.css; do
+for f in filtr-engine.js filtr.js filtr-sheet.js styles.css; do
   if diff -q "minidapp/$f" "$FBRIDGE/$f" >/dev/null 2>&1; then
     echo "  ok    $f byte-identical in the FILTR WebView assets"
   else
