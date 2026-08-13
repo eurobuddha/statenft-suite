@@ -126,6 +126,24 @@ var HOSTING = (function () {
     })();
   }
 
+  // HTTP Basic for a kubo RPC behind a reverse proxy. Browsers (like Android)
+  // drop user:pass@ userinfo from a fetch URL and never send Authorization, so we
+  // strip it from the URL and emit the header explicitly. Creds come from explicit
+  // c.user/c.password, or fall back to userinfo embedded in c.apiUrl.
+  function kuboAuth(c) {
+    var raw = trimSlash(c.apiUrl || ""), user = c.user || "", pass = c.password || "", url = raw;
+    try {
+      var u = new URL(raw);
+      if (u.username || u.password) {
+        if (!user) { user = decodeURIComponent(u.username); pass = decodeURIComponent(u.password); }
+        u.username = ""; u.password = ""; url = trimSlash(u.toString());
+      }
+    } catch (e) {}
+    var headers = {};
+    if (user) headers.Authorization = "Basic " + btoa(user + ":" + pass);
+    return { url: url, headers: headers };
+  }
+
   // kubo /api/v0/add — one multipart with N parts under "dir/"
   function putKubo(p, files, isDir, done) {
     var c = cfgOf(p);
@@ -134,8 +152,9 @@ var HOSTING = (function () {
       fd.append("file", files[i].blob, (isDir ? "dir/" : "") + files[i].name);
     }
     var pin = c.pin === false ? "false" : "true";
-    fetch(trimSlash(c.apiUrl || "") + "/api/v0/add?pin=" + pin + "&cid-version=1&progress=false",
-      { method: "POST", body: fd })
+    var auth = kuboAuth(c);
+    fetch(auth.url + "/api/v0/add?pin=" + pin + "&cid-version=1&progress=false",
+      { method: "POST", headers: auth.headers, body: fd })
       .then(function (res) { return res.text(); })
       .then(function (text) {
         var cid = parseKuboAdd(text, isDir ? "dir" : "");

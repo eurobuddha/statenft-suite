@@ -3186,9 +3186,11 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 hostField(cfg, "urlPrefix", "Public URL prefix", "https://example.com/files/", false);
                 break;
             case Hosting.TYPE_KUBO:
-                hostField(cfg, "apiUrl", "kubo API", "http://192.168.1.10:5001", false);
+                hostField(cfg, "apiUrl", "kubo RPC API", "https://api-ipfs.eurobuddha.com", false);
+                hostField(cfg, "user", "API user (HTTP Basic — optional)", "ipfs", false);
+                hostField(cfg, "password", "API password (HTTP Basic — optional)", "", true);
                 hostField(cfg, "gateway", "Public gateway", "https://ipfs.eurobuddha.com", false);
-                body.addView(Design.note(this, "Uploads use /api/v0/add and pin. Files get a content CID; a url-mode collection becomes one directory CID."), lpm(0, 8, 0, 0));
+                body.addView(Design.note(this, "Uploads use /api/v0/add and pin. Files get a content CID; a url-mode collection becomes one directory CID. If your kubo RPC is behind HTTP Basic auth (reverse proxy), set the user + password here — the app sends an Authorization header (user:pass@ in the URL is dropped by Android → 401)."), lpm(0, 8, 0, 0));
                 break;
             case Hosting.TYPE_PINATA:
                 hostField(cfg, "jwt", "Pinata JWT", "eyJ… (free-tier key)", true);
