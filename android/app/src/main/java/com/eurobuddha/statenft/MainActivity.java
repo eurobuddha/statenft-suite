@@ -96,7 +96,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     private String createMode = "url";
     private String createName = "", createDesc = "", createSize = "12";
     private boolean createWvAuto = false;   // auto-create web-validation doc post-mint
-    private String createBase = "", createExt = ".png", createIcon = "", createExternal = "", createWeb = "";
+    private String createBase = "", createExt = ".jpg", createIcon = "", createExternal = "", createWeb = "";
+    // last successful plate-upload target — the real, verified base/ext. Kept so a cleared or
+    // hand-retyped Base URL can be one-tap restored (and offered as recovery at mint time).
+    private String createUploadedBase = "", createUploadedExt = "";
     private String[] createImages = new String[0];
     private int pendingImageIndex = -1;
     private boolean pendingBatchImages = false;
@@ -291,6 +294,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         JSONObject coll = new JSONObject();
         put(coll, "name", createName); put(coll, "desc", createDesc); put(coll, "size", createSize);
         put(coll, "mode", createMode); put(coll, "base", createBase); put(coll, "ext", createExt);
+        put(coll, "uploadedBase", createUploadedBase); put(coll, "uploadedExt", createUploadedExt);
         put(coll, "icon", createIcon); put(coll, "iconb64", createIconB64); put(coll, "external", createExternal); put(coll, "web", createWeb);
         JSONArray imgs = new JSONArray();
         for (String s : createImages) imgs.put(s == null ? "" : s);
@@ -330,7 +334,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         if (coll != null) {
             createName = coll.optString("name", ""); createDesc = coll.optString("desc", "");
             createSize = coll.optString("size", "12"); createMode = coll.optString("mode", "url");
-            createBase = coll.optString("base", ""); createExt = coll.optString("ext", ".png");
+            createBase = coll.optString("base", ""); createExt = coll.optString("ext", ".jpg");
+            createUploadedBase = coll.optString("uploadedBase", ""); createUploadedExt = coll.optString("uploadedExt", "");
             createIcon = coll.optString("icon", ""); createIconB64 = coll.optString("iconb64", ""); createExternal = coll.optString("external", "");
             createWeb = coll.optString("web", "");
             JSONArray imgs = coll.optJSONArray("images");
@@ -1530,8 +1535,15 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         if ("url".equals(createMode)) {
             baseF[0] = fieldInto(body, "Base URL", "https://…/collection/", createBase);
             baseF[0].addTextChangedListener(watch(sv -> createBase = sv));
-            extF[0] = fieldInto(body, "Extension", ".png", createExt);
+            extF[0] = fieldInto(body, "Extension", ".jpg", createExt);
             extF[0].addTextChangedListener(watch(sv -> createExt = sv));
+            // Safety net: a recorded good upload but a drifted Base URL → one-tap restore.
+            if (!createUploadedBase.isEmpty() && !createUploadedBase.equals(createBase)) {
+                TextView restore = Design.button(this, "Restore uploaded base URL", false);
+                restore.setOnClickListener(v -> { createBase = createUploadedBase; createExt = createUploadedExt; renderCreateCollection(); });
+                body.addView(restore, lph(44, 0, 6, 0, 2));
+                body.addView(Design.note(this, "Uploaded plates live at: " + createUploadedBase + "1" + createUploadedExt), lpm(0, 0, 0, 6));
+            }
             final EditText sizeField = size;
             body.addView(hostingUploadRow("collplates",
                     "Upload plates to hosting → auto-fill base URL",
@@ -1616,7 +1628,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         String d = desc.getText().toString().trim();
         String s = size.getText().toString().trim();
         String bs = base == null ? "" : base.getText().toString().trim();
-        String x = ext == null ? ".png" : ext.getText().toString().trim();
+        String x = ext == null ? ".jpg" : ext.getText().toString().trim();
         String ic = icon.getText().toString().trim();
         String ex = external.getText().toString().trim();
         String w = web.getText().toString().trim();
@@ -1625,7 +1637,7 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         int count = parseIntSafe(s);
         if (count < 2 || count > 20) { toast("Editions must be 2–20"); return; }
         if ("url".equals(createMode) && !bs.startsWith("https://")) { toast("Base URL must start https://"); return; }
-        if (x.isEmpty()) x = ".png";
+        if (x.isEmpty()) x = ".jpg";
         if (!validCmdUrl(ic) || !validCmdUrl(ex) || !validCmdUrl(w) || !validCmdUrl(bs)) {
             toast("URLs must not contain spaces, quotes or semicolons");
             return;
@@ -1640,6 +1652,23 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 }
             }
         }
+        // Foreign-base guard: in url-mode, if the Base URL wasn't produced by uploading plates
+        // for THIS collection (nothing recorded, or it no longer matches), it may point at a
+        // DIFFERENT collection's images that merely happen to serve — the Gilbert & George
+        // incident, where a live-but-wrong base sailed through verify-before-mint. Confirm intent.
+        if ("url".equals(createMode) && !mintBaseConfirmed
+                && (createUploadedBase.isEmpty() || !bs.equals(createUploadedBase))) {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Use this Base URL?")
+                    .setMessage("These images weren't uploaded for this collection here — the Base URL may point at a different set:\n\n"
+                            + bs + "1" + x
+                            + "\n\nTo use your own pictures, tap “Upload plates” first. Mint with this URL anyway?")
+                    .setPositiveButton("Mint anyway", (dg, wch) -> { mintBaseConfirmed = true;
+                            createCollection(name, desc, size, base, ext, icon, external, web); })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
         // verify-before-mint: every hosted URL the mint will seal must serve
         if (!hostGatePassed) {
             java.util.List<String> urls = new java.util.ArrayList<>();
@@ -1650,12 +1679,15 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
             // AFTER mint (it must contain the tokenid, which only exists then).
             // An absent doc just means "not yet validated", never a failed mint.
             if (!urls.isEmpty()) {
-                verifyHostedThen(urls, () -> { hostGatePassed = true;
-                        createCollection(name, desc, size, base, ext, icon, external, web); });
+                verifyHostedThen(urls,
+                        () -> { hostGatePassed = true;
+                                createCollection(name, desc, size, base, ext, icon, external, web); },
+                        badMsg -> offerUploadedBaseRecovery(bs, extValue, badMsg));
                 return;
             }
         }
         hostGatePassed = false;
+        mintBaseConfirmed = false;
         // auto web-validation: derive a path on the default hosting profile and
         // bake its URL into the token now; the engine writes the tokenid there
         // once minting reveals it
@@ -3580,7 +3612,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
 
     private void resetCollectionDraft() {
         createName = ""; createDesc = ""; createSize = "12"; createWvAuto = false;
-        createBase = ""; createExt = ".png"; createIcon = ""; createExternal = ""; createWeb = "";
+        createBase = ""; createExt = ".jpg"; createIcon = ""; createExternal = ""; createWeb = "";
+        createUploadedBase = ""; createUploadedExt = "";
         createImages = new String[0];
         createIconB64 = "";
         collectionItemTraits = null;
@@ -3877,10 +3910,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     }
 
     private boolean hostGatePassed = false;
+    private boolean mintBaseConfirmed = false;   // user okayed a Base URL not from this collection's upload
 
     /** Verify every hosted URL the mint will seal, off the main thread, then
      *  run onOk on the main thread. Any failure names the exact URL. */
+    private interface HostFail { void onFail(String msg); }
+
     private void verifyHostedThen(java.util.List<String> urls, Runnable onOk) {
+        verifyHostedThen(urls, onOk, this::toast);
+    }
+
+    private void verifyHostedThen(java.util.List<String> urls, Runnable onOk, HostFail onFail) {
         toast("Verifying hosted URLs…");
         final Hosting.Profile p = HostingStore.getDefault(this);
         new Thread(() -> {
@@ -3891,7 +3931,36 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 catch (Throwable t) { bad = "URL unreachable: " + u; break; }
             }
             final String err = bad;
-            main.post(() -> { if (err != null) toast(err); else onOk.run(); });
+            main.post(() -> { if (err != null) onFail.onFail(err); else onOk.run(); });
+        }).start();
+    }
+
+    /** At mint, the typed Base URL didn't serve. If we hold a recorded good upload that DOES
+     *  serve, offer to switch to it rather than just failing. Full URLs shown (never truncated). */
+    private void offerUploadedBaseRecovery(String typedBase, String typedExt, String badMsg) {
+        if (createUploadedBase.isEmpty() || createUploadedBase.equals(typedBase)) { toast(badMsg); return; }
+        final String probe = createUploadedBase + "1" + createUploadedExt;
+        final Hosting.Profile p = HostingStore.getDefault(this);
+        toast("Checking your uploaded plates…");
+        new Thread(() -> {
+            boolean ok;
+            try { Hosting.verifyUrl(probe, p); ok = true; } catch (Throwable t) { ok = false; }
+            final boolean good = ok;
+            main.post(() -> {
+                if (!good) { toast(badMsg); return; }
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("Images not at that Base URL")
+                        .setMessage("Nothing is hosted at:\n" + typedBase + "1" + typedExt
+                                + "\n\nYour uploaded plates ARE live at:\n" + probe
+                                + "\n\nUse the uploaded base URL for this mint?")
+                        .setPositiveButton("Use uploaded", (dg, wch) -> {
+                            createBase = createUploadedBase; createExt = createUploadedExt;
+                            renderCreateCollection();
+                            toast("Base URL restored — tap Mint again.");
+                        })
+                        .setNegativeButton("Keep typed", null)
+                        .show();
+            });
         }).start();
     }
 
@@ -4030,6 +4099,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 LocalStore.logEvent(this, "HOSTING plates OK — base " + okBase);
                 createBase = okBase;
                 createExt = okExt;
+                createUploadedBase = okBase;
+                createUploadedExt = okExt;
                 createMode = "url";
                 toast("Uploaded ✓ — base URL filled");
                 renderCreateCollection();
