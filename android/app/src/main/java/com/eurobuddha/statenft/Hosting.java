@@ -10,12 +10,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /** Hosting — upload chosen photos to the USER'S OWN storage and hand back the
- *  public URLs the mint seals on-chain. One profile schema, five backends
- *  (SFTP / WebDAV / kubo IPFS / Pinata / GitHub), one law: what the mint
- *  writes must be a URL that provably serves, and no remote file is ever
+ *  public URLs the mint seals on-chain. One profile schema, six backends
+ *  (SFTP / WebDAV / kubo IPFS / Pinata / GitHub / Arweave), one law: what the
+ *  mint writes must be a URL that provably serves, and no remote file is ever
  *  overwritten. Pure helpers are static and mirrored byte-for-byte in the
  *  MiniDapp's hosting.js — parity pinned by shared fixtures under
- *  test/fixtures/hosting/. */
+ *  test/fixtures/hosting/. Arweave is Android-only (no hosting.js counterpart). */
 final class Hosting {
 
     private Hosting() {}
@@ -27,6 +27,7 @@ final class Hosting {
     static final String TYPE_KUBO = "kubo";
     static final String TYPE_PINATA = "pinata";
     static final String TYPE_GITHUB = "github";
+    static final String TYPE_ARWEAVE = "arweave";   // permanent, content-addressed (ArDrive Turbo)
 
     static class Profile {
         JSONObject j;
@@ -115,6 +116,12 @@ final class Hosting {
      *  isDir=true returns a base ending in "/" ready for base+idx+ext. */
     static String publicUrl(Profile p, String relPathOrCid, boolean isDir) {
         String type = p.type();
+        if (TYPE_ARWEAVE.equals(type)) {
+            // relPathOrCid is a txid (single file) or manifest txid (directory)
+            String gw = trimSlash(p.cfgStr("gateway"));
+            if (gw.isEmpty()) gw = "https://arweave.net";
+            return gw + "/" + relPathOrCid + (isDir ? "/" : "");
+        }
         if (TYPE_KUBO.equals(type) || TYPE_PINATA.equals(type)) {
             String gw = trimSlash(p.cfgStr("gateway"));
             if (gw.isEmpty() && TYPE_PINATA.equals(type)) gw = "https://gateway.pinata.cloud";
@@ -203,6 +210,7 @@ final class Hosting {
             case TYPE_KUBO:   return new IpfsUploader(p);
             case TYPE_PINATA: return new PinataUploader(p);
             case TYPE_GITHUB: return new GithubUploader(p);
+            case TYPE_ARWEAVE: return new ArweaveUploader(p);
             default: throw new HostingException("Unknown destination type: " + p.type());
         }
     }
@@ -239,7 +247,12 @@ final class Hosting {
      *  hosts the user explicitly configured in the profile (a LAN kubo
      *  gateway is legitimate for its owner). */
     static void verifyUrl(String url, Profile p) throws HostingException {
-        int attempts = p != null && TYPE_GITHUB.equals(p.type()) ? 3 : 1;
+        int attempts = 1;
+        long sleepMs = 5000;
+        if (p != null && TYPE_GITHUB.equals(p.type())) { attempts = 3; }                     // raw CDN lag
+        // Fresh Arweave txids 404 for ~5-10 min before the gateway indexes them
+        // (measured live 2026-08-16) — budget ~10 min, return on first success.
+        if (p != null && TYPE_ARWEAVE.equals(p.type())) { attempts = 40; sleepMs = 15000; }
         HostingException last = null;
         for (int a = 0; a < attempts; a++) {
             try {
@@ -248,7 +261,7 @@ final class Hosting {
             } catch (HostingException e) {
                 last = e;
                 if (a < attempts - 1) {
-                    try { Thread.sleep(5000); } catch (InterruptedException ignored) { }
+                    try { Thread.sleep(sleepMs); } catch (InterruptedException ignored) { }
                 }
             }
         }

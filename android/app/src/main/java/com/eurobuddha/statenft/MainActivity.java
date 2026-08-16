@@ -1602,7 +1602,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         webF[0] = fieldInto(body, "Web validate URL (optional)", "https://…/validate", createWeb);
         webF[0].addTextChangedListener(watch(sv -> createWeb = sv));
         body.addView(Design.note(this, "The validation doc must contain the tokenid, which only exists after minting — so a missing doc never blocks the mint; it just isn't validated until the doc is live."), lpm(0, 4, 0, 0));
-        if (HostingStore.getDefault(this) != null) {
+        // wv-auto seals the doc's URL on-chain BEFORE the doc exists — impossible on
+        // content-addressed Arweave (the URL is unknowable pre-upload), so hide it there.
+        Hosting.Profile wvHp = HostingStore.getDefault(this);
+        if (wvHp != null && !Hosting.TYPE_ARWEAVE.equals(wvHp.type())) {
             LinearLayout wvRow = horizontal(Gravity.CENTER_VERTICAL);
             android.widget.CheckBox wvChk = new android.widget.CheckBox(this);
             wvChk.setChecked(createWvAuto);
@@ -1693,7 +1696,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         // once minting reveals it
         String wvRel = "", effWeb = w;
         Hosting.Profile hp = HostingStore.getDefault(this);
-        boolean wvAuto = createWvAuto && hp != null;
+        // arweave: URL unknowable before upload — never auto-seal (checkbox is hidden too)
+        boolean wvAuto = createWvAuto && hp != null && !Hosting.TYPE_ARWEAVE.equals(hp.type());
         if (wvAuto) {
             wvRel = "atelier/" + Hosting.slug(n) + "-validate-" + Hosting.ts36() + ".txt";
             effWeb = Hosting.publicUrl(hp, wvRel, false);
@@ -3145,8 +3149,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     }
 
     private static final String[] HOST_TYPES = { Hosting.TYPE_SFTP, Hosting.TYPE_WEBDAV,
-            Hosting.TYPE_KUBO, Hosting.TYPE_PINATA, Hosting.TYPE_GITHUB };
-    private static final String[] HOST_TYPE_LABELS = { "SFTP", "WebDAV", "IPFS node", "Pinata", "GitHub" };
+            Hosting.TYPE_KUBO, Hosting.TYPE_PINATA, Hosting.TYPE_GITHUB, Hosting.TYPE_ARWEAVE };
+    private static final String[] HOST_TYPE_LABELS = { "SFTP", "WebDAV", "IPFS node", "Pinata", "GitHub", "Arweave" };
 
     private void renderHostingEdit(Hosting.Profile existing) {
         setScreen(Screen.HOSTING_EDIT, this::renderHosting);
@@ -3237,6 +3241,46 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 hostField(cfg, "serve", "Serve via (raw / pages)", "raw", false);
                 hostField(cfg, "pagesPrefix", "Pages prefix (if pages)", "https://you.github.io/nft-assets/", false);
                 break;
+            case Hosting.TYPE_ARWEAVE:
+                body.addView(Design.note(this, "Permanent storage via ArDrive Turbo — no account or signup; your wallet below IS the identity. Files under ~100 KiB upload free; larger files spend the prepaid balance attached to your wallet address (~$0.61 per 20 MiB — fund at https://turbo.ar.io). Uploads are PERMANENT and can never be deleted or overwritten. Fresh URLs take ~5–10 minutes to start serving."), lpm(0, 6, 0, 4));
+                if (cfg.optString("jwk", "").isEmpty()) {
+                    final TextView gen = Design.button(this, "Generate wallet", true);
+                    final org.json.JSONObject arCfg = cfg;
+                    gen.setOnClickListener(v -> {
+                        gen.setText("GENERATING…"); gen.setEnabled(false); gen.setAlpha(0.5f);
+                        new Thread(() -> {   // RSA-4096 keygen takes seconds on-device
+                            try {
+                                String jwk = Ans104.generateJwkJson();
+                                main.post(() -> {
+                                    Hosting.put(arCfg, "jwk", Crypt.encrypt(jwk));
+                                    HostingStore.upsert(this, hostEditProfile);
+                                    toast("Wallet created");
+                                    renderHostingEdit(hostEditProfile);
+                                });
+                            } catch (Exception e) {
+                                main.post(() -> { toast("Wallet generation failed: " + e.getClass().getSimpleName()); renderHostingEdit(hostEditProfile); });
+                            }
+                        }).start();
+                    });
+                    body.addView(gen, lph(48, 0, 4, 0, 4));
+                } else {
+                    String addr;
+                    try { addr = Ans104.addressFromJwk(Crypt.decrypt(cfg.optString("jwk", ""))); }
+                    catch (Exception e) { addr = "(wallet unreadable — paste a valid JWK below)"; }
+                    final String addrF = addr;
+                    body.addView(Design.kicker(this, "Wallet address (tap to copy — fund it here)"), lpm(0, 8, 0, 5));
+                    TextView addrV = Design.text(this, addr, 12f, Design.INK(), Design.mono());
+                    addrV.setBackground(Design.ruled(this, Design.CARD(), Design.INK(), 1.5f));
+                    addrV.setPadding(dp(12), dp(10), dp(12), dp(10));
+                    addrV.setClickable(true);
+                    addrV.setOnClickListener(v -> copyText(addrF));
+                    body.addView(addrV, lpm(0, 0, 0, 4));
+                    body.addView(Design.note(this, "Back up this wallet: reveal the field below and copy the JWK somewhere safe. It exists only on this device (excluded from Android backup) — uninstalling loses the wallet and any balance on it. Your uploaded files stay live regardless."), lpm(0, 4, 0, 4));
+                }
+                hostFieldMulti(cfg, "jwk", "Arweave wallet (JWK JSON — paste to import)", "{\"kty\":\"RSA\",\"n\":\"…\",\"e\":\"AQAB\",\"d\":\"…\"}");
+                hostField(cfg, "endpoint", "Turbo upload endpoint", ArweaveUploader.DEFAULT_ENDPOINT, false);
+                hostField(cfg, "gateway", "Gateway", "https://arweave.net", false);
+                break;
         }
 
         LinearLayout actions = horizontal(Gravity.CENTER_VERTICAL);
@@ -3309,10 +3353,14 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     /** Multiline secret field (SFTP private key). Stored encrypted; the box
      *  stays blank when a key is already stored (type to replace). */
     private void hostFieldMulti(org.json.JSONObject cfg, String key, String label) {
+        hostFieldMulti(cfg, key, label, "-----BEGIN OPENSSH PRIVATE KEY-----\n…");
+    }
+
+    private void hostFieldMulti(org.json.JSONObject cfg, String key, String label, String emptyHint) {
         String cur = cfg.optString(key, "");
         body.addView(Design.kicker(this, label), lpm(0, 8, 0, 5));
         EditText e = new EditText(this);
-        e.setHint(cur.isEmpty() ? "-----BEGIN OPENSSH PRIVATE KEY-----\n…" : "•••••• (stored — paste to replace)");
+        e.setHint(cur.isEmpty() ? emptyHint : "•••••• (stored — paste to replace)");
         e.setTextColor(Design.INK());
         e.setHintTextColor(Design.DIM());
         e.setTextSize(11f);
@@ -3344,9 +3392,16 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     url = u.putFile(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8), rel, "text/plain");
                 }
                 if (u instanceof AutoCloseable) { try { ((AutoCloseable) u).close(); } catch (Exception ignored) { } }
-                // fetch-back leg
-                Hosting.verifyUrl(url, p);
-                result = "uploaded ✓ · fetched ✓\n" + url;
+                if (Hosting.TYPE_ARWEAVE.equals(p.type())) {
+                    // Turbo's 200 + txid IS the storage receipt; the URL itself
+                    // only starts serving after gateway indexing (~5-10 min).
+                    result = "uploaded ✓ — Turbo accepted it (free tier)\n" + url
+                            + "\n\nFresh Arweave URLs take ~5–10 min to start serving.";
+                } else {
+                    // fetch-back leg
+                    Hosting.verifyUrl(url, p);
+                    result = "uploaded ✓ · fetched ✓\n" + url;
+                }
             } catch (SftpUploader.HostKeyUnverified hk) {
                 main.post(() -> confirmHostKey(p, hk.fingerprint));
                 return;
@@ -3921,8 +3976,10 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     }
 
     private void verifyHostedThen(java.util.List<String> urls, Runnable onOk, HostFail onFail) {
-        toast("Verifying hosted URLs…");
         final Hosting.Profile p = HostingStore.getDefault(this);
+        toast(p != null && Hosting.TYPE_ARWEAVE.equals(p.type())
+                ? "Verifying hosted URLs — fresh Arweave uploads can take up to 10 minutes to resolve…"
+                : "Verifying hosted URLs…");
         new Thread(() -> {
             String bad = null;
             for (String u : urls) {
@@ -4008,10 +4065,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 String rel = Hosting.fillTemplate(p.pathTemplate(), mapOf(
                         "collection", coll, "name", lane, "ext", ext,
                         "ts", Hosting.ts36(), "rand", Hosting.rand4(), "idx", ""));
+                if (Hosting.TYPE_ARWEAVE.equals(p.type()) && bytes.length > ArweaveUploader.FREE_TIER_BYTES
+                        && !confirmArweaveSpend(bytes.length, 1)) {
+                    main.post(() -> toast("Upload cancelled — nothing was spent"));
+                    return;
+                }
                 u = Hosting.forProfile(p);
                 if (u.exists(rel)) throw new Hosting.HostingException("Remote file already exists: " + rel);
                 url = u.putFile(bytes, rel, mime);
-                Hosting.verifyUrl(url, p);
+                // arweave: Turbo's 200 + txid is the receipt; the URL only starts
+                // serving after gateway indexing (~5-10 min) — don't block on it.
+                if (!Hosting.TYPE_ARWEAVE.equals(p.type())) Hosting.verifyUrl(url, p);
             } catch (SftpUploader.HostKeyUnverified hk) {
                 main.post(() -> confirmHostKey(p, hk.fingerprint));
                 return;
@@ -4033,7 +4097,8 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 }
                 LocalStore.logEvent(this, "HOSTING " + lane + " OK — " + okUrl);
                 fillHostLane(lane, okUrl, null);
-                toast("Uploaded ✓ — URL filled");
+                toast(Hosting.TYPE_ARWEAVE.equals(p.type())
+                        ? "Uploaded ✓ — URL filled (live in ~5–10 min)" : "Uploaded ✓ — URL filled");
             });
         }).start();
     }
@@ -4068,15 +4133,27 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                     byte[] bytes = plateBytes(uris.get(i));
                     files.add(new Hosting.Entry(bytes, dirRel + "/" + (i + 1) + ext, "image/jpeg"));
                 }
+                if (Hosting.TYPE_ARWEAVE.equals(p.type())) {
+                    long total = 0;
+                    for (Hosting.Entry e : files) total += e.bytes.length;
+                    if (total > ArweaveUploader.FREE_TIER_BYTES && !confirmArweaveSpend(total, files.size())) {
+                        main.post(() -> toast("Upload cancelled — nothing was spent"));
+                        return;
+                    }
+                }
                 u = Hosting.forProfile(p);
                 if (u instanceof Hosting.DirUploader) {
                     base = ((Hosting.DirUploader) u).putDirectory(files, null);
                 } else {
                     base = Hosting.putSequence(u, p, dirRel, files, null);
                 }
-                // verify plate 1 and plate N
-                Hosting.verifyUrl(base + "1" + ext, p);
-                Hosting.verifyUrl(base + uris.size() + ext, p);
+                // verify plate 1 and plate N — except arweave, where the Turbo
+                // receipt is trusted and the pre-mint gate retry-verifies later
+                // (fresh txids take ~5-10 min to serve)
+                if (!Hosting.TYPE_ARWEAVE.equals(p.type())) {
+                    Hosting.verifyUrl(base + "1" + ext, p);
+                    Hosting.verifyUrl(base + uris.size() + ext, p);
+                }
             } catch (SftpUploader.HostKeyUnverified hk) {
                 main.post(() -> confirmHostKey(p, hk.fingerprint));
                 return;
@@ -4102,10 +4179,33 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                 createUploadedBase = okBase;
                 createUploadedExt = okExt;
                 createMode = "url";
-                toast("Uploaded ✓ — base URL filled");
+                toast(Hosting.TYPE_ARWEAVE.equals(p.type())
+                        ? "Uploaded ✓ — base URL filled (live in ~5–10 min)" : "Uploaded ✓ — base URL filled");
                 renderCreateCollection();
             });
         }).start();
+    }
+
+    /** Background-thread gate before a PAID (>100 KiB) Arweave upload: live price
+     *  estimate + a blocking confirm dialog. True = proceed. Estimate failure fails
+     *  open — the uploader's 402 path still stops unfunded spends. */
+    private boolean confirmArweaveSpend(long totalBytes, int fileCount) {
+        String est = ArweaveUploader.priceEstimate(totalBytes);
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final boolean[] ok = { false };
+        main.post(() -> new android.app.AlertDialog.Builder(this)
+                .setTitle("Arweave upload cost")
+                .setMessage((fileCount > 1 ? fileCount + " files · " : "")
+                        + String.format(java.util.Locale.US, "%.1f MiB", totalBytes / 1048576.0)
+                        + " (" + totalBytes + " bytes) will spend ≈ "
+                        + (est.isEmpty() ? "a fee (live estimate unavailable)" : est)
+                        + " from your Arweave balance. Storage is permanent. Continue?")
+                .setPositiveButton("Upload", (d, w) -> { ok[0] = true; latch.countDown(); })
+                .setNegativeButton("Cancel", (d, w) -> latch.countDown())
+                .setOnCancelListener(d -> latch.countDown())
+                .show());
+        try { latch.await(); } catch (InterruptedException ignored) { }
+        return ok[0];
     }
 
     private void fillHostLane(String lane, String url, String ext) {

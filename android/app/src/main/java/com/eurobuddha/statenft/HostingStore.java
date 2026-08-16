@@ -16,7 +16,7 @@ final class HostingStore {
 
     private static final String KEY = "hosting_profiles";
     /** Secret field names per backend — wrapped at rest, redacted in logs. */
-    static final String[] SECRET_FIELDS = { "password", "privateKey", "jwt", "token" };
+    static final String[] SECRET_FIELDS = { "password", "privateKey", "jwt", "token", "jwk" };
 
     private HostingStore() {}
 

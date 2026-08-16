@@ -67,6 +67,21 @@ public class HostingTest {
         }
     }
 
+    /** Arweave is Android-only — inline cases, NOT in the shared parity fixture. */
+    @Test public void publicUrlArweave() {
+        JSONObject cfg = new JSONObject();
+        Hosting.Profile p = profileOf(Hosting.TYPE_ARWEAVE, cfg);
+        assertEquals("https://arweave.net/hs6mzCHlPwyMPFPEqNbxDmHaGFnfSFdcX0b88npqc8E",
+                Hosting.publicUrl(p, "hs6mzCHlPwyMPFPEqNbxDmHaGFnfSFdcX0b88npqc8E", false));
+        assertEquals("default gateway, dir base ends in /",
+                "https://arweave.net/hs6mzCHlPwyMPFPEqNbxDmHaGFnfSFdcX0b88npqc8E/",
+                Hosting.publicUrl(p, "hs6mzCHlPwyMPFPEqNbxDmHaGFnfSFdcX0b88npqc8E", true));
+        Hosting.put(cfg, "gateway", "https://permagate.io/");
+        assertEquals("custom gateway, trailing slash trimmed",
+                "https://permagate.io/tx123/",
+                Hosting.publicUrl(p, "tx123", true));
+    }
+
     @Test public void kuboAddParsingMatchesSharedFixtures() throws Exception {
         JSONArray cases = fixtures().getJSONArray("kuboAdd");
         for (int i = 0; i < cases.length(); i++) {
