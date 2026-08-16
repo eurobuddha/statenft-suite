@@ -43,6 +43,7 @@ final class Ans104 {
     static Jwk parseJwk(String json) throws Exception {
         JSONObject j = new JSONObject(json);
         byte[] n = b64uDecode(j.getString("n"));
+        requireRsa4096(n);
         RSAPrivateCrtKeySpec spec = new RSAPrivateCrtKeySpec(
                 new BigInteger(1, n),
                 new BigInteger(1, b64uDecode(j.getString("e"))),
@@ -77,8 +78,18 @@ final class Ans104 {
 
     /** Wallet address = b64url(sha256(raw modulus bytes)). */
     static String addressFromJwk(String json) throws Exception {
-        byte[] n = leftPad(b64uDecode(new JSONObject(json).getString("n")), 512);
-        return b64u(MessageDigest.getInstance("SHA-256").digest(n));
+        byte[] n = b64uDecode(new JSONObject(json).getString("n"));
+        requireRsa4096(n);
+        return b64u(MessageDigest.getInstance("SHA-256").digest(leftPad(n, 512)));
+    }
+
+    /** ANS-104 signature type 1 requires an RSA-4096 owner — reject imported JWKs
+     *  of any other size up front, with a message the user can act on (otherwise
+     *  they'd only see a cryptic signature-length failure at upload time). */
+    private static void requireRsa4096(byte[] n) throws Exception {
+        int len = n.length;
+        if (len > 0 && n[0] == 0) len--;    // tolerate a leading sign byte
+        if (len != 512) throw new Exception("Arweave wallets must be RSA-4096 — this key is " + (len * 8) + "-bit");
     }
 
     /* ==================== tags (Avro block encoding) ==================== */

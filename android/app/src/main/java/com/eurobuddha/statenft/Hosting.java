@@ -246,23 +246,42 @@ final class Hosting {
      *  pulled whole. SSRF policy: the standard blocklist applies EXCEPT for
      *  hosts the user explicitly configured in the profile (a LAN kubo
      *  gateway is legitimate for its owner). */
+    /** Per-attempt progress hook for slow verifications. Return false to abort. */
+    interface VerifyTick { boolean onTick(String url, int attempt, long elapsedMs); }
+
     static void verifyUrl(String url, Profile p) throws HostingException {
+        verifyUrl(url, p, 0, null);
+    }
+
+    /** deadlineAt (epoch ms) caps the retry window for slow backends — pass one
+     *  shared deadline when verifying a batch so N URLs can't each burn the full
+     *  budget; 0 = per-call default. tick fires before every attempt. */
+    static void verifyUrl(String url, Profile p, long deadlineAt, VerifyTick tick) throws HostingException {
         int attempts = 1;
         long sleepMs = 5000;
-        if (p != null && TYPE_GITHUB.equals(p.type())) { attempts = 3; }                     // raw CDN lag
+        boolean slow = p != null && TYPE_ARWEAVE.equals(p.type());
+        if (p != null && TYPE_GITHUB.equals(p.type())) { attempts = 3; }   // raw CDN lag
         // Fresh Arweave txids 404 for ~5-10 min before the gateway indexes them
-        // (measured live 2026-08-16) — budget ~10 min, return on first success.
-        if (p != null && TYPE_ARWEAVE.equals(p.type())) { attempts = 40; sleepMs = 15000; }
+        // (measured live 2026-08-16) — retry until the deadline, return on first success.
+        if (slow) {
+            sleepMs = 15000;
+            if (deadlineAt <= 0) deadlineAt = System.currentTimeMillis() + 10L * 60 * 1000;
+            attempts = Integer.MAX_VALUE;   // deadline-bounded below
+        }
+        long start = System.currentTimeMillis();
         HostingException last = null;
         for (int a = 0; a < attempts; a++) {
+            if (tick != null && !tick.onTick(url, a + 1, System.currentTimeMillis() - start)) {
+                throw new HostingException("Verification stopped by user: " + url);
+            }
             try {
                 verifyOnce(url, p);
                 return;
             } catch (HostingException e) {
                 last = e;
-                if (a < attempts - 1) {
-                    try { Thread.sleep(sleepMs); } catch (InterruptedException ignored) { }
-                }
+                boolean more = slow ? System.currentTimeMillis() + sleepMs < deadlineAt : a < attempts - 1;
+                if (!more) break;
+                try { Thread.sleep(sleepMs); } catch (InterruptedException ignored) { }
             }
         }
         throw last;

@@ -3253,12 +3253,17 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
                                 String jwk = Ans104.generateJwkJson();
                                 main.post(() -> {
                                     Hosting.put(arCfg, "jwk", Crypt.encrypt(jwk));
+                                    // persist immediately — a generated key must never exist unsaved;
+                                    // default the name so the upsert can't create a blank list entry
+                                    if (hostEditProfile.name().isEmpty()) Hosting.put(hostEditProfile.j, "name", "Arweave");
                                     HostingStore.upsert(this, hostEditProfile);
                                     toast("Wallet created");
-                                    renderHostingEdit(hostEditProfile);
+                                    if (screen == Screen.HOSTING_EDIT) renderHostingEdit(hostEditProfile);
+                                    else toast("Reopen the destination to see your wallet address");
                                 });
                             } catch (Exception e) {
-                                main.post(() -> { toast("Wallet generation failed: " + e.getClass().getSimpleName()); renderHostingEdit(hostEditProfile); });
+                                main.post(() -> { toast("Wallet generation failed: " + e.getClass().getSimpleName());
+                                        if (screen == Screen.HOSTING_EDIT) renderHostingEdit(hostEditProfile); });
                             }
                         }).start();
                     });
@@ -3975,25 +3980,84 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         verifyHostedThen(urls, onOk, this::toast);
     }
 
+    private volatile boolean verifyGateRunning = false;
+    private volatile boolean verifyGateCancel = false;
+
     private void verifyHostedThen(java.util.List<String> urls, Runnable onOk, HostFail onFail) {
+        if (verifyGateRunning) {
+            toast("Still verifying your hosted URLs — hold on, fresh Arweave uploads can take up to 10 minutes. Minting continues automatically when they resolve.");
+            return;
+        }
+        verifyGateRunning = true;
+        verifyGateCancel = false;
         final Hosting.Profile p = HostingStore.getDefault(this);
-        toast(p != null && Hosting.TYPE_ARWEAVE.equals(p.type())
-                ? "Verifying hosted URLs — fresh Arweave uploads can take up to 10 minutes to resolve…"
-                : "Verifying hosted URLs…");
+        final boolean slow = p != null && Hosting.TYPE_ARWEAVE.equals(p.type());
+        LocalStore.logEvent(this, "MINT GATE start (" + urls.size() + " urls, type="
+                + (p == null ? "none" : p.type()) + "): " + urls);
+
+        // Live progress dialog — the gate can legitimately run ~10 min on Arweave.
+        // "Hide" backgrounds it (verification continues, completion toasts);
+        // "Stop" aborts the mint attempt cleanly.
+        final TextView msgV = Design.note(this, slow
+                ? "Fresh Arweave uploads take ~5–10 minutes to start serving. Verifying…"
+                : "Verifying…");
+        msgV.setPadding(dp(20), dp(14), dp(20), dp(6));
+        android.app.AlertDialog dlg = null;
+        try {
+            dlg = new android.app.AlertDialog.Builder(this)
+                    .setTitle("Verifying hosted URLs")
+                    .setView(msgV)
+                    .setCancelable(false)
+                    .setPositiveButton("Hide", null)
+                    .setNegativeButton("Stop", (d, w) -> { verifyGateCancel = true; toast("Stopping…"); })
+                    .show();
+        } catch (Throwable ignored) { }   // activity going away — thread still reports via log
+        final android.app.AlertDialog dlgF = dlg;
+
+        // ONE deadline shared across the whole batch — N urls can't each burn 10 min.
+        final long deadline = System.currentTimeMillis() + 12L * 60 * 1000;
+        final long began = System.currentTimeMillis();
         new Thread(() -> {
             String bad = null;
-            for (String u : urls) {
-                try { Hosting.verifyUrl(u, p); }
-                catch (Hosting.HostingException e) { bad = e.getMessage(); break; }
+            for (int i = 0; i < urls.size(); i++) {
+                final String u = urls.get(i);
+                final int idx = i + 1, n = urls.size();
+                try {
+                    Hosting.verifyUrl(u, p, slow ? deadline : 0, (url, attempt, elapsedMs) -> {
+                        if (verifyGateCancel) return false;
+                        long el = (System.currentTimeMillis() - began) / 1000;
+                        final String line = "URL " + idx + " of " + n + " — attempt " + attempt
+                                + " · " + (el / 60) + "m " + (el % 60) + "s elapsed\n\n" + url
+                                + (slow ? "\n\nFresh Arweave uploads take ~5–10 minutes to start serving."
+                                        + " You can Hide this — minting continues automatically." : "");
+                        main.post(() -> { try { msgV.setText(line); } catch (Throwable ignored) { } });
+                        return true;
+                    });
+                    LocalStore.logEvent(this, "MINT GATE ok " + idx + "/" + n + " — " + u);
+                } catch (Hosting.HostingException e) { bad = e.getMessage(); break; }
                 catch (Throwable t) { bad = "URL unreachable: " + u; break; }
             }
             final String err = bad;
-            main.post(() -> { if (err != null) onFail.onFail(err); else onOk.run(); });
+            final long took = (System.currentTimeMillis() - began) / 1000;
+            main.post(() -> {
+                verifyGateRunning = false;
+                if (dlgF != null) { try { dlgF.dismiss(); } catch (Throwable ignored) { } }
+                if (err != null) {
+                    LocalStore.logEvent(this, "MINT GATE FAILED after " + took + "s: " + err);
+                    onFail.onFail(err);
+                } else {
+                    LocalStore.logEvent(this, "MINT GATE passed in " + took + "s");
+                    toast("URLs verified ✓ — minting…");
+                    onOk.run();
+                }
+            });
         }).start();
     }
 
     /** At mint, the typed Base URL didn't serve. If we hold a recorded good upload that DOES
-     *  serve, offer to switch to it rather than just failing. Full URLs shown (never truncated). */
+     *  serve, offer to switch to it rather than just failing. Full URLs shown (never truncated).
+     *  NOTE: on Arweave this probe inherits verifyUrl's ~10-min retry budget, so a gate failure
+     *  can chain a second slow check — rare double-failure path, accepted deliberately. */
     private void offerUploadedBaseRecovery(String typedBase, String typedExt, String badMsg) {
         if (createUploadedBase.isEmpty() || createUploadedBase.equals(typedBase)) { toast(badMsg); return; }
         final String probe = createUploadedBase + "1" + createUploadedExt;
@@ -4193,17 +4257,22 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
         String est = ArweaveUploader.priceEstimate(totalBytes);
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
         final boolean[] ok = { false };
-        main.post(() -> new android.app.AlertDialog.Builder(this)
-                .setTitle("Arweave upload cost")
-                .setMessage((fileCount > 1 ? fileCount + " files · " : "")
-                        + String.format(java.util.Locale.US, "%.1f MiB", totalBytes / 1048576.0)
-                        + " (" + totalBytes + " bytes) will spend ≈ "
-                        + (est.isEmpty() ? "a fee (live estimate unavailable)" : est)
-                        + " from your Arweave balance. Storage is permanent. Continue?")
-                .setPositiveButton("Upload", (d, w) -> { ok[0] = true; latch.countDown(); })
-                .setNegativeButton("Cancel", (d, w) -> latch.countDown())
-                .setOnCancelListener(d -> latch.countDown())
-                .show());
+        main.post(() -> {
+            try {
+                if (isFinishing() || isDestroyed()) { latch.countDown(); return; }
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("Arweave upload cost")
+                        .setMessage((fileCount > 1 ? fileCount + " files · " : "")
+                                + String.format(java.util.Locale.US, "%.1f MiB", totalBytes / 1048576.0)
+                                + " (" + totalBytes + " bytes) will spend ≈ "
+                                + (est.isEmpty() ? "a fee (live estimate unavailable)" : est)
+                                + " from your Arweave balance. Storage is permanent. Continue?")
+                        .setPositiveButton("Upload", (d, w) -> { ok[0] = true; latch.countDown(); })
+                        .setNegativeButton("Cancel", (d, w) -> latch.countDown())
+                        .setOnCancelListener(d -> latch.countDown())
+                        .show();
+            } catch (Throwable t) { latch.countDown(); }   // dead activity → treat as cancel, never strand the upload thread
+        });
         try { latch.await(); } catch (InterruptedException ignored) { }
         return ok[0];
     }
