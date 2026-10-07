@@ -4591,10 +4591,12 @@ public class MainActivity extends AppCompatActivity implements ViewerScreen.Host
     }
 
     private void openMinimaCore() {
-        Intent launch = getPackageManager().getLaunchIntentForPackage("org.minimarex.minimacore");
+        Intent launch = getPackageManager().getLaunchIntentForPackage("com.eurobuddha.minimacore");
+        if (launch == null) launch = getPackageManager().getLaunchIntentForPackage("com.eurobuddha.minimablock");
+        if (launch == null) launch = getPackageManager().getLaunchIntentForPackage("com.eurobuddha.pandamonium");
         if (launch != null) startActivity(launch);
         else {
-            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=org.minimarex.minimacore"))); }
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.eurobuddha.minimacore"))); }
             catch (Exception e) { toast("Minima Core app not found"); }
         }
     }
