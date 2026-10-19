@@ -1,0 +1,18 @@
+Atelier 0.7.19 / code719 — standalone viewer parity checkpoint
+Reused adapt-pandamonium-atelier-viewer.py directly against standalone app sources.
+JSON root/name/token envelopes now resolve NFT names, tickers and metadata.
+Missing-image lots invalidate the previous loader request; malformed traits no
+longer crash the viewer; token/coin hashes share the available width; action
+labels wrap with 48dp minimum targets. No identity or transaction changes.
+Android9 compatibility: reused ImageTools.encode's SDK-gated WebP format in
+hosted icon uploads. The same fix is in Pandamonium's canonical upload include.
+
+Validation: 58 tests pass with no failures/errors/skips, including four metadata
+and three viewer regressions adapted from Pandamonium. Existing codec, planner,
+hosting and asset parity tests pass. Offline assembleRelease/lintRelease pass:
+0 errors, 81 warnings. Source/adapters/callers/changed tests and diff reviewed;
+no blocking finding in this port. Broader hosting/mint/export parity remains open.
+Actual APK package/version and family signing certificate verified.
+Candidate: android/dist/atelier-0.7.19-candidate.apk
+SHA256: 9f52b50f40624a17662889ce805a6078f3e5fb5dc5599d532e1225772266c886
+No physical-device check, installation or publication.

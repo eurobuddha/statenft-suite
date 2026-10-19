@@ -58,9 +58,9 @@ public final class StateNft {
     public static Meta parseMeta(String tokenid, Object tokenNode) {
         Meta m = new Meta();
         m.tokenid = tokenid == null ? "" : tokenid;
-        JSONObject root = tokenNode instanceof JSONObject ? (JSONObject) tokenNode : null;
-        if (root != null && root.opt("token") instanceof JSONObject) {
-            JSONObject wrapped = root.optJSONObject("token");
+        JSONObject root = Util.asObject(tokenNode);
+        if (root != null) {
+            JSONObject wrapped = Util.asObject(root.opt("token"));
             if (wrapped != null) {
                 try {
                     JSONObject merged = new JSONObject(wrapped.toString());
@@ -77,13 +77,10 @@ public final class StateNft {
                 }
             }
         }
-        JSONObject meta = null;
-        if (root != null && root.opt("name") instanceof JSONObject) {
-            meta = root.optJSONObject("name");
-        }
+        JSONObject meta = root == null ? null : Util.asObject(root.opt("name"));
         JSONObject src = meta != null ? meta : root;
         if (src != null) {
-            m.name = first(src.optString("name", ""), root.optString("name", ""), "Collection");
+            m.name = first(src.optString("name", ""), "Collection");
             m.description = first(src.optString("description", ""), root.optString("description", ""));
             m.mode = first(src.optString("mode", ""), root.optString("mode", ""), src.optString("base", "").isEmpty() ? "embed" : "url");
             m.size = firstInt(src.opt("size"), root.opt("size"), root.opt("totalamount"), root.opt("total"));

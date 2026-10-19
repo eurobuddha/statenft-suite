@@ -72,7 +72,8 @@ public final class ViewerScreen {
         info.setGravity(Gravity.CENTER);
         info.setBackground(Design.ripple(Design.rect(0xB3111111)));
         info.setPadding(Design.dp(c, 12), 0, Design.dp(c, 12), 0);
-        top.addView(info, new LinearLayout.LayoutParams(-2, Design.dp(c, 48)));
+        info.setMinHeight(Design.dp(c, 48));
+        top.addView(info, new LinearLayout.LayoutParams(-2, -2));
         FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         topLp.topMargin = Design.dp(c, 30);
         root.addView(top, topLp);
@@ -97,9 +98,8 @@ public final class ViewerScreen {
             lotLabel.setText(String.format(java.util.Locale.US, "LOT %03d / %03d", it.index, Math.max(meta.size, items.size())));
             img.setImageBitmap(Identicon.forToken(meta.tokenid + it.index, 900));
             img.resetZoom();
-            if (it.imageUrl != null && !it.imageUrl.isEmpty()) {
-                ImageLoader.loadFull(act, it.imageUrl, img);
-            }
+            // The loader also clears the previous request tag for an empty URL.
+            ImageLoader.loadFull(act, it.imageUrl, img);
             buildSheet(act, host, sheet, meta, it);
         };
 
@@ -161,11 +161,13 @@ public final class ViewerScreen {
         hashes.setOrientation(LinearLayout.HORIZONTAL);
         TextView tok = Design.hash(c, "token " + Util.shorten(meta.tokenid));
         copyOnTap(act, tok, meta.tokenid);
-        hashes.addView(tok);
+        hashes.addView(tok, new LinearLayout.LayoutParams(0, -2, 1));
         if (it.coin != null) {
             TextView coin = Design.hash(c, "coin " + Util.shorten(it.coin.optString("coinid")));
             copyOnTap(act, coin, it.coin.optString("coinid"));
-            hashes.addView(coin, lp(c, 8, 0, 0, 0));
+            LinearLayout.LayoutParams coinLp = new LinearLayout.LayoutParams(0, -2, 1);
+            coinLp.leftMargin = Design.dp(c, 8);
+            hashes.addView(coin, coinLp);
         }
         sheet.addView(hashes, lp(c, 0, 0, 0, 8));
 
@@ -175,10 +177,11 @@ public final class ViewerScreen {
         if (attrs == null) attrs = meta.attributes;
         if (attrs != null && attrs.length() > 0) {
             LinearLayout traitRow = null;
+            int renderedTraits = 0;
             for (int i = 0; i < attrs.length(); i++) {
                 JSONObject a = attrs.optJSONObject(i);
                 if (a == null) continue;
-                if (i % 3 == 0) {
+                if (renderedTraits % 3 == 0) {
                     traitRow = new LinearLayout(c);
                     traitRow.setOrientation(LinearLayout.HORIZONTAL);
                     sheet.addView(traitRow, lp(c, 0, 0, 0, 6));
@@ -196,10 +199,11 @@ public final class ViewerScreen {
                 tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 box.addView(tv);
                 LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, -2, 1);
-                if (i % 3 != 0) blp.leftMargin = Design.dp(c, 6);
+                if (renderedTraits % 3 != 0) blp.leftMargin = Design.dp(c, 6);
                 traitRow.addView(box, blp);
+                renderedTraits++;
             }
-            int rem = attrs.length() % 3;
+            int rem = renderedTraits % 3;
             if (rem != 0 && traitRow != null) {
                 for (int i = 0; i < 3 - rem; i++) {
                     View sp = new View(c);
@@ -244,16 +248,19 @@ public final class ViewerScreen {
         if (it.owned && it.coin != null) {
             TextView tr = Design.button(c, "Transfer", true);
             tr.setOnClickListener(v -> host.onTransferItem(it));
-            actions.addView(tr, weight(c, 46));
+            tr.setMinHeight(Design.dp(c, 48));
+            actions.addView(tr, weight(c, -2));
             actions.addView(space(c, 8), new LinearLayout.LayoutParams(Design.dp(c, 8), 1));
         }
         TextView save = Design.button(c, "Save", false);
         save.setOnClickListener(v -> saveToPhotos(act, meta, it));
-        actions.addView(save, weight(c, 46));
+        save.setMinHeight(Design.dp(c, 48));
+        actions.addView(save, weight(c, -2));
         actions.addView(space(c, 8), new LinearLayout.LayoutParams(Design.dp(c, 8), 1));
         TextView share = Design.button(c, "Share", false);
         share.setOnClickListener(v -> shareImage(act, meta, it));
-        actions.addView(share, weight(c, 46));
+        share.setMinHeight(Design.dp(c, 48));
+        actions.addView(share, weight(c, -2));
         sheet.addView(actions, lp(c, 0, 10, 0, 0));
     }
 
@@ -418,7 +425,7 @@ public final class ViewerScreen {
     }
 
     private static LinearLayout.LayoutParams weight(Context c, int hDp) {
-        return new LinearLayout.LayoutParams(0, Design.dp(c, hDp), 1);
+        return new LinearLayout.LayoutParams(0, hDp < 0 ? hDp : Design.dp(c, hDp), 1);
     }
 
     /* ---- matrix zoom ImageView: pinch, pan, double-tap, fling-to-navigate ---- */
